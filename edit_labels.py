@@ -14,6 +14,8 @@ Keyboard controls:
     d: step forward a frame
     q: play faster
     e: play slower
+    <number>: add bodypart
+    <space>: go to next nan
 
     <Tracking>
     0: drug mode
@@ -30,13 +32,16 @@ import time
 import math
 import collections
 import csv
+from datetime import datetime
 import numpy as np
 import pandas as pd
 import cv2
+import pytz
 
 # global variables
 cur_x, cur_y = 100, 100  # current mouse pointer position
 drag = False
+rclick = False
 # sub = ''
 pixel_limit = 10.0
 mode = 'drag_mode'
@@ -46,7 +51,7 @@ def edit_labels(h5_path, video, mag_factor):
     '''
     video_cursor
     '''
-    global cur_x, cur_y, drag, mode, pixel_limit
+    global cur_x, cur_y, drag, rclick, mode, pixel_limit
 
     ###################################
     # Initialize video windows
@@ -102,10 +107,11 @@ def edit_labels(h5_path, video, mag_factor):
                    ord('w'): 'play',
                    ord('a'): 'prev_frame', ord('d'): 'next_frame',
                    ord('q'): 'slow', ord('e'): 'fast',
-                   ord(' '): 'snap',
+                   ord(' '): 'jump_nan',
                    ord('0'): 'drag_mode',
                    ord('!'): 'target_sub1', ord('@'): 'target_sub2',
                    ord('j'): 'start_freezing', ord('k'): 'end_freezing',
+                   ord('p'): 'p_value',
                    -1: 'no_key_press',
                    27: 'exit'}
     current_frame = 0
@@ -116,7 +122,7 @@ def edit_labels(h5_path, video, mag_factor):
     # Adjust video width 750 pixel
     _ret, img = cap.read()
     video_format = img.shape
-    print("Video resolution: {}".format(video_format))
+    print("video resolution: {}".format(video_format))
     x_pixcels = img.shape[1]
     y_pixcels = img.shape[0]
     # r = 3
@@ -142,6 +148,15 @@ def edit_labels(h5_path, video, mag_factor):
     bodyparts = mdf.columns.unique(level='bodyparts').to_numpy()
     coords = mdf.columns.unique(level='coords').to_numpy()
     idx = pd.IndexSlice     # Initialize the IndexSlice
+    mdf_modified = np.array([False for x in range(tots)])
+
+    # add member of dictionary
+    bodypart_id = 0
+    for i_sco in scorer:
+        for i_ind in individuals:
+            for i_bod in bodyparts:
+                bodypart_id += 1
+                status_list[ord(str(bodypart_id))] = ['add', i_ind, i_bod]
 
     # prepare to store trajectory and freezing
     path, filename = os.path.split(video)
@@ -173,6 +188,7 @@ def edit_labels(h5_path, video, mag_factor):
 
     hold_a_bodypart = False
     held_bodypart = ['', '', '']
+    p_value = 1.0
 
     ######################################################################
     # Main loop
@@ -214,7 +230,9 @@ def edit_labels(h5_path, video, mag_factor):
                             # Convert the stored bodypart coordinates to match current video size
                             stored_x = int(tab_x)*mag_factor
                             stored_y = int(tab_y)*mag_factor
+                            label_deleted = False
 
+            # Drag mouse
                             if not hold_a_bodypart:
                                 # print('not hold')
                                 # If mouse pointer does not hold any bodypart, check the distance
@@ -227,6 +245,7 @@ def edit_labels(h5_path, video, mag_factor):
                                     mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
                                         [float(cur_x)/mag_factor,
                                          float(cur_y)/mag_factor, likelihood]
+                                    mdf_modified[current_frame] = True
                                 # Display cross at the mouse pointer position
                                     [dis_x, dis_y] = [cur_x, cur_y]
                                 # Display bodypart text on image
@@ -244,6 +263,7 @@ def edit_labels(h5_path, video, mag_factor):
                                         mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
                                             [float(cur_x)/mag_factor,
                                              float(cur_y)/mag_factor, likelihood]
+                                        mdf_modified[current_frame] = True
                                 # Display cross at the mouse pointer position
                                         [dis_x, dis_y] = [cur_x, cur_y]
                                 # Display bodypart text on image
@@ -257,24 +277,39 @@ def edit_labels(h5_path, video, mag_factor):
                                     # Display cross at the store position
                                     [dis_x, dis_y] = [stored_x, stored_y]
 
+            # Right click to delete label
+                            if rclick and math.sqrt((stored_x-cur_x)**2 +
+                                                    (stored_y-cur_y)**2) < pixel_limit:
+
+                                print('one label is deleted')
+                                # Store nans into table
+                                mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
+                                    [math.nan, math.nan, likelihood]
+                                label_deleted = True
+                                mdf_modified[current_frame] = True
+
             # Draw cross on video
-                            if i_ind == 'sub1':
-                                color = (0, 255, 0)
-                            elif i_ind == 'sub2':
-                                color = (0, 0, 255)
-                            if likelihood > 0.1:
-                                thickness = 2
-                            else:
-                                thickness = 1
+                            if not label_deleted:
+                                if i_ind == 'sub1':
+                                    color = (0, 255, 0)
+                                elif i_ind == 'sub2':
+                                    color = (0, 0, 255)
 
-                            cv2.line(img, (dis_x+length, dis_y+length),
-                                     (dis_x-length, dis_y-length), color, thickness)
-                            cv2.line(img, (dis_x+length, dis_y-length),
-                                     (dis_x-length, dis_y+length), color, thickness)
+                                if float(likelihood) < 0.011:
+                                    cv2.circle(
+                                        img, (dis_x, dis_y), 10, color, thickness=1, lineType=8, shift=0)
+                                else:
+                                    if float(likelihood) >= p_value:
+                                        thickness = 1
+                                    else:
+                                        thickness = 2
 
-            # ###################################
+                                    cv2.line(img, (dis_x+length, dis_y+length),
+                                             (dis_x-length, dis_y-length), color, thickness)
+                                    cv2.line(img, (dis_x+length, dis_y-length),
+                                             (dis_x-length, dis_y+length), color, thickness)
+
             # display freezing state
-
             if freeze_modify_on_frame == current_frame:
                 if target_freeze == -1:
                     freeze_modify_on_frame = -1
@@ -299,16 +334,16 @@ def edit_labels(h5_path, video, mag_factor):
                 else:
                     cv2.imshow(sub_freeze[i], no_freeze_sign)
 
-            # ###################################
             # display coordinates
             # Create new blank image
-            width, height = 350, 180
+            width, height = 400, 180
             # white = (255, 255, 255)
             black = (0, 0, 0)
             coords_blank = create_blank(width, height, rgb_color=black)
 
             lines_pos = 0
             lines_add = 20
+            id_n = 0
 
             for i_sco in scorer:
                 for i_ind in individuals:
@@ -321,22 +356,21 @@ def edit_labels(h5_path, video, mag_factor):
                             color = red
 
                         lines_pos = lines_pos + lines_add
-                        text = i_ind+","+i_bod+": "
+                        id_n = id_n + 1
+                        text = str(id_n)+": "+i_ind+","+i_bod+": "
                         cv2.putText(coords_blank, text, (20, lines_pos),
                                     cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
 
                         text = str(tab_x)+"   "+str(tab_y) + \
                             "   "+str(likelihood)
-                        cv2.putText(coords_blank, text, (150, lines_pos),
+                        cv2.putText(coords_blank, text, (200, lines_pos),
                                     cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
 
             cv2.imshow('coords', coords_blank)
 
-            ###################################
             # show video frame
             cv2.imshow('image', img)
 
-            ###################################
             # Read key input
             status_new = status_list[cv2.waitKey(1)]
 
@@ -393,26 +427,62 @@ def edit_labels(h5_path, video, mag_factor):
                 # freeze_state = False
                 freeze_modify_off_frame = current_frame
                 status = status_pre
-            elif status == 'snap':
-                cv2.imwrite("./"+"Snap_"+str(i)+".jpg", img)
-                print("Snap of Frame", current_frame, "Taken!")
+            elif status == 'jump_nan':
                 status = 'stop'
+                current_frame = jump_nan(mdf, current_frame)
+                cv2.setTrackbarPos('S', 'image', current_frame)
+            elif status == 'p_value':
+                status = 'stop'
+                print("Please input p_value threshould: ", end='')
+                p_value = float(input())
+            # elif status == 'snap':
+            #     cv2.imwrite("./"+"Snap_"+str(i)+".png", img)
+            #     print("Snap of Frame", current_frame, "Taken!")
+            #     status = 'stop'
+            elif status[0] == 'add':
+                # print(status[0])
+                add_label(mdf, mdf_modified, current_frame,
+                          scorer[0], status[1], status[2])
+                status = 'stop'
+
             elif status == 'exit':
                 break
 
         except KeyError:
             print("Invalid Key was pressed")
-    # Clean up windows
-    cap.release()
-    cv2.destroyAllWindows()
 
     # write file for trajectory and freezing
-    # write_trajectory(tots,xy1,xy2,freeze,video)
     write_traj(width, half_dep, l1_coord, l2_coord,
                l4_coord, tots, xy1, xy2, freeze, video)
 
     # write file for freeze start, end duration
     write_freeze(tots, freeze, video)
+
+    # Write h5 file for extracted frames
+    tz_ny = pytz.timezone('America/New_York')
+    now = datetime.now(tz_ny)
+    extrxt_dir = os.path.join(
+        './', now.strftime("%Y%m%d-%H%M%S") + '-extracted')
+    if not os.path.isdir(extrxt_dir):
+        os.mkdir(extrxt_dir)
+
+    mdf[mdf_modified].to_hdf(extrxt_dir+'/extracted.h5',
+                             key='df_output', mode='w')
+
+    # Extract frames modified
+    for frame in range(tots):
+        if mdf_modified[frame]:
+            print("frame = ", frame, " is modified", end=": ")
+            # read one video frame
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
+            _ret, img = cap.read()
+            cv2.imwrite(extrxt_dir+"/img" +
+                        "{:03d}".format(frame)+".png", img)
+            print("Snap of Frame", frame, "Taken!")
+
+    # Clean up windows
+    cap.release()
+    cv2.destroyAllWindows()
 
 
 def write_freeze(tots, freeze, video):
@@ -468,7 +538,7 @@ def write_freeze(tots, freeze, video):
     base, _ext = os.path.splitext(filename)
     filename = '_' + base + '_freeze.csv'
 
-    print("\tWriting {}".format(filename))
+    print("Writing {}".format(filename))
     write_pd2csv(path, filename, df_output, column_name, column_type, 1000)
 
 
@@ -483,6 +553,46 @@ def create_blank(width, height, rgb_color=(0, 0, 0)):
     image[:] = color
 
     return image
+
+
+def jump_nan(mdf, current_frame):
+    '''
+    jump_nan
+    '''
+    idx = pd.IndexSlice     # Initialize the IndexSlice
+    find = False
+    column_nan = np.array(
+        [mdf.loc[idx[y], idx[:, :, :, :]].isnull().sum() for y in range(len(mdf.index))])
+
+    if current_frame == len(mdf.index)-1:
+        frame = current_frame
+    else:
+        for frame in range(current_frame+1, len(mdf.index)):
+            if column_nan[frame] > 0:
+                print('frame '+str(frame)+' contains nan')
+                find = True
+                break
+        if not find:
+            for frame in range(0, current_frame+1):
+                if column_nan[frame] > 0:
+                    print('frame '+str(frame)+' contains nan')
+                    find = True
+                    break
+
+    return frame
+
+
+def add_label(mdf, mdf_modified, current_frame, i_sco, i_ind, i_bod):
+    '''
+    add_label
+    '''
+    idx = pd.IndexSlice     # Initialize the IndexSlice
+
+    # Store the mouse pointer position into table
+    mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
+        [100.0, 100.0, 1.0]
+    mdf_modified[current_frame] = True
+    print('one label is added')
 
 
 def write_pd2csv(path, filename, df_output, column_name, column_type, _mlw=1000):
@@ -536,7 +646,7 @@ def dragging(event, read_x, read_y, _flags, _param):
 
     Mouse events handler
     '''
-    global cur_x, cur_y, drag, mode, pixel_limit
+    global cur_x, cur_y, drag, rclick, mode, pixel_limit
     if event == cv2.EVENT_LBUTTONDOWN:
         if mode == 'drag_mode':
             drag = True
@@ -546,6 +656,11 @@ def dragging(event, read_x, read_y, _flags, _param):
     elif event == cv2.EVENT_MOUSEMOVE:
         if drag:
             cur_x, cur_y = read_x, read_y
+    elif event == cv2.EVENT_RBUTTONDOWN:
+        cur_x, cur_y = read_x, read_y
+        rclick = True
+    elif event == cv2.EVENT_RBUTTONUP:
+        rclick = False
 
 
 def flick(_x):
@@ -629,7 +744,7 @@ def read_traj(video):
     filename = '_' + base + '_track_freeze.csv'
     input_filename = os.path.join(path, filename)
 
-    print("\tReading {}".format(filename))
+    print("Reading {}".format(filename))
 
     # reading csv file
     with open(input_filename, 'r') as csvfile:
@@ -714,7 +829,7 @@ def write_traj(width, half_dep, l1_coord, l2_coord, l4_coord, tots, xy1, xy2, fr
     filename = '_' + base + '_track_freeze.csv'
     output_filename = os.path.join(path, filename)
 
-    print("\tWriting {}".format(filename))
+    print("Writing {}".format(filename))
 
     with open(output_filename, 'w', newline='') as csvfile:  # newline='' is for windows
         spamwriter = csv.writer(csvfile, delimiter=',')

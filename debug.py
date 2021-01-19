@@ -1,5 +1,5 @@
 # import pandas as pd
-import videoplay as vp
+import edit_labels as vp
 h5_path = r'W:\videos_synchrony\20200713\m154DLC_resnet50_test01Dec21shuffle1_100000.h5'
 # df = pd.read_hdf(path)
 
