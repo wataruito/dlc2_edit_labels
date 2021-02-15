@@ -1,12 +1,12 @@
 '''
-Orignated from maximus009/VideoPlayer
+dlc2_edit_labels
+
+Simple editor to create/edit bodypart lables for DeepLabCut
+
+Developed based on maximus009/VideoPlayer
     https://github.com/maximus009/VideoPlayer
 
-9/14/2020 wi Bug fix
-    # freeze_end[epoch,i] = current_frame Identified bug 9/14/2020 wi
-    freeze_end[epoch,i] = current_frame - 1
-
-Keyboard controls:
+Keyboard interface:
     <Video control>
     w: start palying
     s: stop playing
@@ -26,6 +26,10 @@ Keyboard controls:
     @: target sub2
     j: start freezing
     k: end freezing
+
+9/14/2020 wi Bug fix
+    # freeze_end[epoch,i] = current_frame Identified bug 9/14/2020 wi
+    freeze_end[epoch,i] = current_frame - 1
 '''
 
 import os
@@ -869,3 +873,12 @@ def write_traj(width, half_dep, l1_coord, l2_coord, l4_coord, tots, xy1, xy2, fr
         spamwriter.writerow(['coordinate:'])
 
         df_output.to_csv(csvfile, index=False)
+
+
+if __name__ == '__main__':
+
+    input_h5_path = r'W:\videos_synchrony\20200713\m154DLC_resnet50_test01Dec21shuffle1_100000.h5'
+    input_video = r'm154.mp4'
+    input_mag_factor = 2
+
+    edit_labels(input_h5_path, input_video, input_mag_factor)
