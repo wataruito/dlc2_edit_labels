@@ -14,6 +14,7 @@ Keyboard controls:
     d: step forward a frame
     q: play faster
     e: play slower
+    r: reset to original inferring coords
     <number>: add bodypart
     <space>: go to next nan
 
@@ -112,6 +113,7 @@ def edit_labels(h5_path, video, mag_factor):
                    ord('!'): 'target_sub1', ord('@'): 'target_sub2',
                    ord('j'): 'start_freezing', ord('k'): 'end_freezing',
                    ord('p'): 'p_value',
+                   ord('r'): 'reset_to_original',
                    -1: 'no_key_press',
                    27: 'exit'}
     current_frame = 0
@@ -141,7 +143,7 @@ def edit_labels(h5_path, video, mag_factor):
 
     # Read DeepLabCut h5 file
     mdf = pd.read_hdf(h5_path)
-    # mdf_org = mdf.copy()    # Keep original
+    mdf_org = mdf.copy()    # Keep original
     # Extract levels
     scorer = mdf.columns.unique(level='scorer').to_numpy()
     individuals = mdf.columns.unique(level='individuals').to_numpy()
@@ -296,8 +298,8 @@ def edit_labels(h5_path, video, mag_factor):
                                     color = (0, 0, 255)
 
                                 if float(likelihood) < 0.011:
-                                    cv2.circle(
-                                        img, (dis_x, dis_y), 10, color, thickness=1, lineType=8, shift=0)
+                                    cv2.circle(img, (dis_x, dis_y), 10, color,
+                                               thickness=1, lineType=8, shift=0)
                                 else:
                                     if float(likelihood) >= p_value:
                                         thickness = 1
@@ -444,7 +446,9 @@ def edit_labels(h5_path, video, mag_factor):
                 add_label(mdf, mdf_modified, current_frame,
                           scorer[0], status[1], status[2])
                 status = 'stop'
-
+            elif status == 'reset_to_original':
+                reset_to_original(mdf, mdf_org, mdf_modified, current_frame)
+                status = 'stop'
             elif status == 'exit':
                 break
 
@@ -553,6 +557,25 @@ def create_blank(width, height, rgb_color=(0, 0, 0)):
     image[:] = color
 
     return image
+
+
+def reset_to_original(mdf, mdf_org, mdf_modified, current_frame):
+    '''
+    reset_to_original
+    '''
+    scorer = mdf.columns.unique(level='scorer').to_numpy()
+    individuals = mdf.columns.unique(level='individuals').to_numpy()
+    bodyparts = mdf.columns.unique(level='bodyparts').to_numpy()
+    idx = pd.IndexSlice     # Initialize the IndexSlice
+
+    for i_sco in scorer:
+        for i_ind in individuals:
+            for i_bod in bodyparts:
+                mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
+                    mdf_org.loc[idx[current_frame],
+                                idx[i_sco, i_ind, i_bod, :]]
+
+    mdf_modified[current_frame] = False
 
 
 def jump_nan(mdf, current_frame):
