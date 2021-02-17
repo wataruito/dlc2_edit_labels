@@ -1,12 +1,20 @@
 # dlc2_edit_labels
  
 Simple editor to create/edit bodypart lables for DeepLabCut
+- Read a inferred output (like *_resnet50_test01Dec21shuffle1_100000.h5) and movie (*.mp4)
+- Display video and markers for inferred bodyparts
+- The markers can be dragged freely
+- Add manual annotation for freezing for each mouse
+- Output the frames and bodypart coordinate, which are modified
+
+Not implimented yet
+- Merge with existing training dataset and relabel them if need
 
 Using the basic framework from maximus009/VideoPlayer<BR>
     https://github.com/maximus009/VideoPlayer
 
 
-### Interface:
+## Interface:
 #### video control
     w: start palying
     s: stop playing
