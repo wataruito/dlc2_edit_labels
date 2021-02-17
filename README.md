@@ -5,9 +5,9 @@ Simple editor to create/edit bodypart lables for DeepLabCut
 - Display video and markers for inferred bodyparts
 - The markers can be dragged freely
 - Add manual annotation for freezing for each mouse
-- Output the frames and bodypart coordinate, which are modified
+- Output only the frames and bodypart coordinates that are modified
 
-Not implimented yet
+#### Not implimented yet
 - Merge with existing training dataset and relabel them if need
 
 Using the basic framework from maximus009/VideoPlayer<BR>
