@@ -86,6 +86,7 @@ class EditLabels():
         self.freeze_flag_on_frame = -1
         self.freeze_flag_off_frame = -1
         self.freeze_flag_erase_frame = -1
+        self.freeze_sub_change = False
 
         self.black = (0, 0, 0)
         self.green = (0, 255, 0)
@@ -481,6 +482,13 @@ class EditLabels():
                 self.freeze_flag_off_frame = -1
                 self.freeze[self.current_frame, self.freeze_sub] = False
 
+        # whenever subject changed, freeze_flag reset (previous freeze annotation is lost)
+        if self.freeze_sub_change:
+            self.freeze_flag = False
+            self.freeze_flag_on_frame = -1
+            self.freeze_flag_off_frame = -1
+            self.freeze_sub_change = False
+
         # display premade panel image on freezing panel
         for i in range(2):
             if self.freeze_flag and self.freeze_sub == i:
@@ -594,11 +602,13 @@ class EditLabels():
         # target for anotating freeze to sub1
         elif self.status == 'target_sub1':
             self.freeze_sub = 0
+            self.freeze_sub_change = True
             self.status = status_pre
 
         # target for anotating freeze to sub2
         elif self.status == 'target_sub2':
             self.freeze_sub = 1
+            self.freeze_sub_change = True
             self.status = status_pre
 
         # annotate start_freezing
