@@ -3,33 +3,35 @@ dlc2_edit_labels
 
 Simple editor to create/edit bodypart lables for DeepLabCut
 
-Developed based on maximus009/VideoPlayer
+Using the basic framework from maximus009/VideoPlayer
     https://github.com/maximus009/VideoPlayer
 
-Keyboard interface:
-    <Video control>
+Interface:
+<Video control>
     w: start palying
     s: stop playing
     a: step back a frame
     d: step forward a frame
     q: play faster
     e: play slower
-    r: reset to original inferring coords
-    <number>: add bodypart
-    <space>: go to next nan
+    <space>: go to next frame containing nan value
 
-    <Tracking>
-    0: drug mode
+<marker manipulation>
+    left hold drag: drag a marker
+    right click: delete a marker
+    r: back to the inferring coords
+    <number>: add bodypart (see number for each bodypart in the coordinate window)
+    p: set p_value, which set the boundary between thick and thin cross marking
 
-    <Freezing>
+<anotating freeze>
     !: target sub1
     @: target sub2
-    j: start freezing
-    k: end freezing
+    j: freezing start, freeze_flag on (first video frame for freeze)
+    k: freezing end, freeze_flag off (first video frame when animal start moving)
+    u: erase freezing annotation, freeze_flag off
 
-9/14/2020 wi Bug fix
-    # freeze_end[epoch,i] = current_frame Identified bug 9/14/2020 wi
-    freeze_end[epoch,i] = current_frame - 1
+<mode change>
+    0: drug mode
 '''
 
 import os
@@ -43,454 +45,759 @@ import pandas as pd
 import cv2
 import pytz
 
-# global variables
-cur_x, cur_y = 100, 100  # current mouse pointer position
-drag = False
-rclick = False
-# sub = ''
-pixel_limit = 10.0
-mode = 'drag_mode'
 
-
-def edit_labels(h5_path, video, mag_factor):
+class EditLabels():
     '''
-    video_cursor
+    EditLabels
     '''
-    global cur_x, cur_y, drag, rclick, mode, pixel_limit
 
-    ###################################
-    # Initialize video windows
-    cv2.namedWindow('image')
-    cv2.moveWindow('image', 250, 300)
-    # Set mouse callback
-    cv2.setMouseCallback('image', dragging)
-    # Open video file
-    cap = cv2.VideoCapture(video)
-    # Get the total number of frame
-    tots = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    def __init__(self, h5_path, video, mag_factor):
+        '''
+        '''
 
-    # Add two trackbars
-    cv2.createTrackbar('S', 'image', 0, int(tots)-1, flick)
-    cv2.setTrackbarPos('S', 'image', 0)
+        self.h5_path = h5_path              # DeepLabCut inferring result file
+        self.video = video                  # video path
+        self.mag_factor = mag_factor        # magnifying video
 
-    cv2.createTrackbar('F', 'image', 1, 100, flick)
-    frame_rate = 30
-    cv2.setTrackbarPos('F', 'image', frame_rate)
-    # cv2.setTrackbarPos('F','image',0)
+        self.status_list = []               # key command list
 
-    ##################################
-    # Initialize freeze indicator window for each subject
-    sub_freeze = ['sub1_freeze', 'sub2_freeze']
+        self.length = 5                     # cross cursor length
+        self.pixel_limit = 10.0
+        self.frame_rate = 30
+        self.real_frame_rate = self.frame_rate
 
-    cv2.namedWindow(sub_freeze[0])
-    cv2.moveWindow(sub_freeze[0], 250, 50)
+        self.cur_x, self.cur_y = 100, 100   # current mouse pointer position
+        self.current_frame = 0              # current video frame position
+        self.status = 'stop'                # current video player status
 
-    cv2.namedWindow(sub_freeze[1])
-    cv2.moveWindow(sub_freeze[1], 600, 50)
+        self.start_time = time.time()
 
-    # Create new blank image
-    # freeze
-    width, height = 200, 50
-    red = (255, 0, 0)
-    freeze_sign = create_blank(width, height, rgb_color=red)
-    cv2.putText(freeze_sign, "Freeze", (40, 35),
-                cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
-    # no_freeze
-    green = (0, 255, 0)
-    no_freeze_sign = create_blank(width, height, rgb_color=green)
-    cv2.putText(no_freeze_sign, "No_freeze", (20, 35),
-                cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
+        self.drag = False
+        self.rclick = False
+        self.mode = 'drag_mode'             # currently it does not change during operation
+        self.hold_a_bodypart = False        # flag holding a bodypart marker with mouse
 
-    ##################################
-    # Initialize coordinate display window
-    cv2.namedWindow('coords')
-    cv2.moveWindow('coords', 1000, 50)
+        # current bodypart id (id_held_bodypart = [i_sco, i_ind, i_bod])
+        self.id_held_bodypart = ['', '', '']
+        self.p_value = 1.0
 
-    ###################################
+        self.freeze_sub = 0                 # target subject # for annotating freeze
+        self.freeze_flag = False
+        self.freeze_flag_on_frame = -1
+        self.freeze_flag_off_frame = -1
+        self.freeze_flag_erase_frame = -1
 
-    status_list = {ord('s'): 'stop',
-                   ord('w'): 'play',
-                   ord('a'): 'prev_frame', ord('d'): 'next_frame',
-                   ord('q'): 'slow', ord('e'): 'fast',
-                   ord(' '): 'jump_nan',
-                   ord('0'): 'drag_mode',
-                   ord('!'): 'target_sub1', ord('@'): 'target_sub2',
-                   ord('j'): 'start_freezing', ord('k'): 'end_freezing',
-                   ord('p'): 'p_value',
-                   ord('r'): 'reset_to_original',
-                   -1: 'no_key_press',
-                   27: 'exit'}
-    current_frame = 0
-    status = 'stop'
-    start_time = time.time()
-    real_frame_rate = frame_rate
+        self.black = (0, 0, 0)
+        self.green = (0, 255, 0)
+        self.red = (255, 0, 0)
 
-    # Adjust video width 750 pixel
-    _ret, img = cap.read()
-    video_format = img.shape
-    print("video resolution: {}".format(video_format))
-    x_pixcels = img.shape[1]
-    y_pixcels = img.shape[0]
-    # r = 3
-    dim = (x_pixcels*mag_factor, y_pixcels*mag_factor)
+        self.idx = pd.IndexSlice
 
-    print("total frame number: {}".format(tots))
+        # values will be set in the following code
+        self.cap = []
+        self.tots = []
+        self.dim = []
+        self.mdf = []
+        self.mdf_org = []
+        self.scorer = []
+        self.individuals = []
+        self.bodyparts = []
+        self.coords = []
+        self.mdf_modified = []              # specify modified frames for bodypart coordinates
 
-    length = 5  # cross cursor length
+        self.width = []
+        self.half_dep = []
+        self.l1_coord = []
+        self.l2_coord = []
+        self.l4_coord = []
+        self.xy1 = []
+        self.xy2 = []
+        self.freeze = []
 
-    # prepare to store freezing
-    target_freeze = -1
-    # freeze_state = False
-    freeze_modify = False
-    freeze_modify_on_frame = -1
-    freeze_modify_off_frame = -1
+        self.sub_freeze = []
+        self.no_freeze_sign = []
+        self.freeze_sign = []
 
-    # Read DeepLabCut h5 file
-    mdf = pd.read_hdf(h5_path)
-    mdf_org = mdf.copy()    # Keep original
-    # Extract levels
-    scorer = mdf.columns.unique(level='scorer').to_numpy()
-    individuals = mdf.columns.unique(level='individuals').to_numpy()
-    bodyparts = mdf.columns.unique(level='bodyparts').to_numpy()
-    coords = mdf.columns.unique(level='coords').to_numpy()
-    idx = pd.IndexSlice     # Initialize the IndexSlice
-    mdf_modified = np.array([False for x in range(tots)])
+        self.img = []
 
-    # add member of dictionary
-    bodypart_id = 0
-    for i_sco in scorer:
-        for i_ind in individuals:
-            for i_bod in bodyparts:
-                bodypart_id += 1
-                status_list[ord(str(bodypart_id))] = ['add', i_ind, i_bod]
+    def edit_labels(self, ):
+        '''
+        video_cursor
+        '''
+        # global cur_x, cur_y, drag, rclick, mode, pixel_limit
 
-    # prepare to store trajectory and freezing
-    path, filename = os.path.split(video)
-    base, _ext = os.path.splitext(filename)
-    filename = '_' + base + '_track_freeze.csv'
+        self.initialize_param()
+        self.initialize_windows()
 
-    if os.path.exists(os.path.join(path, filename)):
-        # xy1, xy2, freeze = read_trajectory(video)
-        width, half_dep, l1_coord, l2_coord, l4_coord, xy1, xy2, freeze = read_traj(
-            video)
+        self.main_loop()
 
-        idx = pd.IndexSlice
-        bodypart = 'snout'
-        coords = ['x', 'y']
-        xy1 = mdf.loc[idx[:], idx[:, 'sub1', bodypart, coords]
-                      ].to_numpy().astype(int)*mag_factor
-        xy2 = mdf.loc[idx[:], idx[:, 'sub2', bodypart, coords]
-                      ].to_numpy().astype(int)*mag_factor
+        # write file for trajectory and freezing
+        write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
+                   self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
 
-    else:
-        width = 295.0
-        half_dep = 86.5
-        l1_coord = [-5, 667]
-        l2_coord = [42, 486]
-        l4_coord = [914, 670]
-        xy1 = np.array([[-1 for x in range(2)] for y in range(tots)])
-        xy2 = np.array([[-1 for x in range(2)] for y in range(tots)])
-        freeze = np.array([[False for x in range(2)] for y in range(tots)])
+        # write file for freeze start, end duration
+        write_freeze(self.tots, self.freeze, self.video)
 
-    hold_a_bodypart = False
-    held_bodypart = ['', '', '']
-    p_value = 1.0
+        # Write h5 file for extracted frames
+        tz_ny = pytz.timezone('America/New_York')
+        now = datetime.now(tz_ny)
+        extrxt_dir = os.path.join(
+            './', now.strftime("%Y%m%d-%H%M%S") + '-extracted')
+        if not os.path.isdir(extrxt_dir):
+            os.mkdir(extrxt_dir)
 
-    ######################################################################
-    # Main loop
-    while True:
-        try:
-            # If reach to the end, play from the begining
-            # if current_frame==tots-1:
-            if current_frame == tots:
-                current_frame = 0
+        self.mdf[self.mdf_modified].to_hdf(extrxt_dir+'/extracted.h5',
+                                           key='df_output', mode='w')
 
-            # read one video frame
-            cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
-            _ret, img = cap.read()
+        # Extract video frames modified
+        for frame in range(self.tots):
+            if self.mdf_modified[frame]:
+                print("frame = ", frame, " is modified", end=": ")
+                # read one video frame
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
+                _ret, img = self.cap.read()
+                cv2.imwrite(extrxt_dir+"/img" +
+                            "{:03d}".format(frame)+".png", img)
+                print("Snap of Frame", frame, "Taken!")
 
-            # resize video
-            img = cv2.resize(img, dim, interpolation=cv2.INTER_AREA)
+        # Clean up windows
+        self.cap.release()
+        cv2.destroyAllWindows()
 
-            # put current state and real frame rate in the image
-            im_text1 = "video_status: " + status + ", frame_rate: " + \
-                str(real_frame_rate) + " fps"
-            im_text2 = "nmode: " + mode + \
-                ", target_freeze: " + str(target_freeze+1) + \
-                ", freeze_modify: " + str(freeze_modify)
+    def flick(self, _x):
+        '''
+        flick
+        '''
+        # pass
 
-            add_text(img, im_text1, dim[1]-40, 0.5)
-            add_text(img, im_text2, dim[1]-20, 0.5)
+    def mouse_call_back(self, event, read_x, read_y, _flags, _param):
+        '''
+        dragging
 
-            ###########################################
-            # Display bodyparts marker
-            ###########################################
-            # Loop all bodyparts
-            #   scorer -> individuals -> bodyparts
-            for i_sco in scorer:
-                for i_ind in individuals:
-                    for i_bod in bodyparts:
-                        [tab_x, tab_y, likelihood] = mdf.loc[idx[current_frame],
-                                                             idx[i_sco, i_ind, i_bod, :]].to_numpy()
-                        if not (math.isnan(tab_x) or math.isnan(tab_y)):
-                            # Convert the stored bodypart coordinates to match current video size
-                            stored_x = int(tab_x)*mag_factor
-                            stored_y = int(tab_y)*mag_factor
-                            label_deleted = False
+        Mouse events handler
+        '''
+        # global cur_x, cur_y, drag, rclick, mode, pixel_limit
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if self.mode == 'drag_mode':
+                self.drag = True
+                self.cur_x, self.cur_y = read_x, read_y
+        elif event == cv2.EVENT_LBUTTONUP:
+            self.drag = False
+        elif event == cv2.EVENT_MOUSEMOVE:
+            if self.drag:
+                self.cur_x, self.cur_y = read_x, read_y
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self.cur_x, self.cur_y = read_x, read_y
+            self.rclick = True
+        elif event == cv2.EVENT_RBUTTONUP:
+            self.rclick = False
 
-            # Drag mouse
-                            if not hold_a_bodypart:
-                                # print('not hold')
-                                # If mouse pointer does not hold any bodypart, check the distance
-                                # If less than 10 pixels, then hit
-                                if drag and math.sqrt((stored_x-cur_x)**2 +
-                                                      (stored_y-cur_y)**2) < pixel_limit:
-                                    hold_a_bodypart = True
-                                    held_bodypart = [i_sco, i_ind, i_bod]
-                                # Store the mouse pointer position into table
-                                    mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
-                                        [float(cur_x)/mag_factor,
-                                         float(cur_y)/mag_factor, likelihood]
-                                    mdf_modified[current_frame] = True
-                                # Display cross at the mouse pointer position
-                                    [dis_x, dis_y] = [cur_x, cur_y]
-                                # Display bodypart text on image
-                                    cv2.putText(img, i_bod, (dis_x+20, dis_y-20),
-                                                cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
-                                else:
-                                    # Display cross at the store position
-                                    [dis_x, dis_y] = [stored_x, stored_y]
-                            else:
-                                # print('hold')
-                                if collections.Counter(held_bodypart) == \
-                                        collections.Counter([i_sco, i_ind, i_bod]):
-                                    if drag:
-                                        # Store the mouse pointer position into table
-                                        mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
-                                            [float(cur_x)/mag_factor,
-                                             float(cur_y)/mag_factor, likelihood]
-                                        mdf_modified[current_frame] = True
-                                # Display cross at the mouse pointer position
-                                        [dis_x, dis_y] = [cur_x, cur_y]
-                                # Display bodypart text on image
-                                        cv2.putText(img, i_bod, (dis_x+20, dis_y-20),
-                                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
-                                    else:
-                                        hold_a_bodypart = False
-                                # Display cross at the store position
-                                        [dis_x, dis_y] = [stored_x, stored_y]
-                                else:
-                                    # Display cross at the store position
-                                    [dis_x, dis_y] = [stored_x, stored_y]
+    def initialize_windows(self):
+        '''
+        initialize_windows
+        '''
+        ###################################
+        # Initialize main video windows
+        cv2.namedWindow('image')
+        cv2.moveWindow('image', 250, 300)
+        # Set mouse callback
+        cv2.setMouseCallback('image', self.mouse_call_back)
 
-            # Right click to delete label
-                            if rclick and math.sqrt((stored_x-cur_x)**2 +
-                                                    (stored_y-cur_y)**2) < pixel_limit:
+        # Open video file
+        self.cap = cv2.VideoCapture(self.video)
+        # Get the total number of frame
+        self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-                                print('one label is deleted')
-                                # Store nans into table
-                                mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
-                                    [math.nan, math.nan, likelihood]
-                                label_deleted = True
-                                mdf_modified[current_frame] = True
+        # Add two slider bars
+        # for frame position
+        cv2.createTrackbar('S', 'image', 0, int(self.tots)-1, self.flick)
+        cv2.setTrackbarPos('S', 'image', 0)
+        # for play speed (fps)
+        cv2.createTrackbar('F', 'image', 1, 100, self.flick)
+        cv2.setTrackbarPos('F', 'image', self.frame_rate)
+        # cv2.setTrackbarPos('F','image',0)
 
-            # Draw cross on video
-                            if not label_deleted:
-                                if i_ind == 'sub1':
-                                    color = (0, 255, 0)
-                                elif i_ind == 'sub2':
-                                    color = (0, 0, 255)
+        ##################################
+        # Initialize freeze indicator window for each subject
+        self.sub_freeze = ['sub1_freeze', 'sub2_freeze']
+        # animal 1
+        cv2.namedWindow(self.sub_freeze[0])
+        cv2.moveWindow(self.sub_freeze[0], 250, 50)
+        # animal 2
+        cv2.namedWindow(self.sub_freeze[1])
+        cv2.moveWindow(self.sub_freeze[1], 600, 50)
 
-                                if float(likelihood) < 0.011:
-                                    cv2.circle(img, (dis_x, dis_y), 10, color,
-                                               thickness=1, lineType=8, shift=0)
-                                else:
-                                    if float(likelihood) >= p_value:
-                                        thickness = 1
-                                    else:
-                                        thickness = 2
+        # Create image showing freeze/no_freeze
+        # freeze
+        width, height = 200, 50
+        self.freeze_sign = create_blank(width, height, rgb_color=self.red)
+        cv2.putText(self.freeze_sign, "Freeze", (40, 35),
+                    cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
+        # no_freeze
+        self.no_freeze_sign = create_blank(width, height, rgb_color=self.green)
+        cv2.putText(self.no_freeze_sign, "No_freeze", (20, 35),
+                    cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
 
-                                    cv2.line(img, (dis_x+length, dis_y+length),
-                                             (dis_x-length, dis_y-length), color, thickness)
-                                    cv2.line(img, (dis_x+length, dis_y-length),
-                                             (dis_x-length, dis_y+length), color, thickness)
+        ##################################
+        # Initialize display window for bodypart coordinate
+        cv2.namedWindow('coords')
+        cv2.moveWindow('coords', 1000, 50)
 
-            # display freezing state
-            if freeze_modify_on_frame == current_frame:
-                if target_freeze == -1:
-                    freeze_modify_on_frame = -1
+    def initialize_param(self):
+        '''
+        initialize_param
+        '''
+        ###################################
+        # Open video file
+        self.cap = cv2.VideoCapture(self.video)
+        # Get the total number of frame
+        self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Adjust video size according to mag_factor
+        _ret, img = self.cap.read()
+        video_format = img.shape
+        x_pixcels = img.shape[1]
+        y_pixcels = img.shape[0]
+        self.dim = (x_pixcels*self.mag_factor, y_pixcels*self.mag_factor)
+
+        print("video resolution: {}".format(video_format))
+        print("total frame number: {}".format(self.tots))
+
+        ###################################
+        # Read DeepLabCut h5 file
+        self.mdf = pd.read_hdf(self.h5_path)
+        self.mdf_org = self.mdf.copy()    # Keep original
+
+        # Extract data from specific levels
+        self.scorer = self.mdf.columns.unique(level='scorer').to_numpy()
+        self.individuals = self.mdf.columns.unique(
+            level='individuals').to_numpy()
+        self.bodyparts = self.mdf.columns.unique(level='bodyparts').to_numpy()
+        self.coords = self.mdf.columns.unique(level='coords').to_numpy()
+        self.mdf_modified = np.array([False for x in range(self.tots)])
+
+        ###################################
+        # keyboard commands
+        self.status_list = {ord('s'): 'stop',
+                            ord('w'): 'play',
+                            ord('a'): 'prev_frame', ord('d'): 'next_frame',
+                            ord('q'): 'slow', ord('e'): 'fast',
+                            ord(' '): 'jump_nan',
+                            # ord('0'): 'drag_mode',
+                            ord('!'): 'target_sub1', ord('@'): 'target_sub2',
+                            ord('j'): 'start_freezing', ord('k'): 'end_freezing',
+                            ord('u'): 'erase_freezing',
+                            ord('p'): 'p_value',
+                            ord('r'): 'reset_to_original',
+                            -1: 'no_key_press',
+                            27: 'exit'}
+
+        # add member of dictionary for keyboard commands
+        bodypart_id = 0
+        for _i_sco in self.scorer:
+            for i_ind in self.individuals:
+                for i_bod in self.bodyparts:
+                    bodypart_id += 1
+                    self.status_list[ord(str(bodypart_id))] = [
+                        'add', i_ind, i_bod]
+
+        ###################################
+        # prepare variables to store trajectory and freezing
+        # if the file ([video]_track_freeze.csv) already exist, read it
+        path, filename = os.path.split(self.video)
+        base, _ext = os.path.splitext(filename)
+        filename = '_' + base + '_track_freeze.csv'
+
+        if os.path.exists(os.path.join(path, filename)):
+            # xy1, xy2, freeze = read_trajectory(video)
+            self.width, self.half_dep, self.l1_coord, self.l2_coord, \
+                self.l4_coord, self.xy1, self.xy2, self.freeze = read_traj(
+                    self.video)
+
+            # idx = pd.IndexSlice
+            bodypart = 'snout'
+            coords = ['x', 'y']
+            self.xy1 = self.mdf.loc[self.idx[:], self.idx[:, 'sub1', bodypart, coords]
+                                    ].to_numpy().astype(int)*self.mag_factor
+            self.xy2 = self.mdf.loc[self.idx[:], self.idx[:, 'sub2', bodypart, coords]
+                                    ].to_numpy().astype(int)*self.mag_factor
+        # if not exist, create it
+        else:
+            self.width = 295.0
+            self.half_dep = 86.5
+            self.l1_coord = [-5, 667]
+            self.l2_coord = [42, 486]
+            self.l4_coord = [914, 670]
+            self.xy1 = np.array([[-1 for x in range(2)]
+                                 for y in range(self.tots)])
+            self.xy2 = np.array([[-1 for x in range(2)]
+                                 for y in range(self.tots)])
+            self.freeze = np.array([[False for x in range(2)]
+                                    for y in range(self.tots)])
+
+    def disp_marker(self, i_sco, i_ind, i_bod):
+        '''
+        disp_marker
+        '''
+
+        [tab_x, tab_y, likelihood] = self.mdf.loc[self.idx[self.current_frame],
+                                                  self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+        # if value is not empty, display the bodypart marker
+        if not (math.isnan(tab_x) or math.isnan(tab_y)):
+            stored_x = int(tab_x)*self.mag_factor
+            stored_y = int(tab_y)*self.mag_factor
+            label_deleted = False
+
+        # Dragging a bodypart marker
+        # when currently not holding any bodypart
+            if not self.hold_a_bodypart:
+                # If mouse pointer does not hold any bodypart, check the distance
+                # from current mouse pointer coordinate
+                # If less than 10 pixels, then hit the current bodypart
+                if self.drag and math.sqrt((stored_x-self.cur_x)**2 +
+                                           (stored_y-self.cur_y)**2) < self.pixel_limit:
+                    self.hold_a_bodypart = True
+                    self.id_held_bodypart = [i_sco, i_ind, i_bod]
+
+                    # Store the mouse pointer position into table
+                    self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
+                        [float(self.cur_x)/self.mag_factor,
+                            float(self.cur_y)/self.mag_factor, likelihood]
+                    self.mdf_modified[self.current_frame] = True
+
+                    # Display cross at the mouse pointer position
+                    [dis_x, dis_y] = [self.cur_x, self.cur_y]
+
+                    # Display bodypart text on image
+                    #print('coordinate', dis_x+20, dis_y-20)
+                    cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
                 else:
-                    freeze_modify = True
+                    # Display cross at the store position
+                    [dis_x, dis_y] = [stored_x, stored_y]
 
-            if freeze_modify_off_frame == current_frame:
-                if freeze_modify:
-                    freeze_modify = False
-                    for i in range(freeze_modify_on_frame, freeze_modify_off_frame + 1):
-                        freeze[i, target_freeze] = True
-
-                    freeze_modify_on_frame = -1
-                    freeze_modify_off_frame = -1
-
-            for i in range(2):
-                if freeze_modify and target_freeze == i:
-                    # print(i)
-                    cv2.imshow(sub_freeze[i], freeze_sign)
-                elif freeze[current_frame, i]:
-                    cv2.imshow(sub_freeze[i], freeze_sign)
+        # contining bodypart holding
+            else:
+                # Test if current bodypart is the same to the held bodypart
+                if collections.Counter(self.id_held_bodypart) == \
+                        collections.Counter([i_sco, i_ind, i_bod]):
+                    if self.drag:
+                        # Store the mouse pointer position into table
+                        self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
+                            [float(self.cur_x)/self.mag_factor,
+                                float(self.cur_y)/self.mag_factor, likelihood]
+                        self.mdf_modified[self.current_frame] = True
+                        # Display cross at the mouse pointer position
+                        [dis_x, dis_y] = [
+                            self.cur_x, self.cur_y]
+                        # Display bodypart text on image
+                        cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
+                    else:
+                        self.hold_a_bodypart = False
+                        # Display cross at the store position
+                        [dis_x, dis_y] = [
+                            stored_x, stored_y]
+                # If different bodypart from the held bodypart
                 else:
-                    cv2.imshow(sub_freeze[i], no_freeze_sign)
+                    # Display cross at the store position
+                    [dis_x, dis_y] = [stored_x, stored_y]
 
-            # display coordinates
-            # Create new blank image
-            width, height = 400, 180
-            # white = (255, 255, 255)
-            black = (0, 0, 0)
-            coords_blank = create_blank(width, height, rgb_color=black)
+        # Right click to delete the bodypart marker
+            if self.rclick and math.sqrt((stored_x-self.cur_x)**2 +
+                                         (stored_y-self.cur_y)**2) < self.pixel_limit:
 
-            lines_pos = 0
-            lines_add = 20
-            id_n = 0
+                print('one label is deleted')
+                # Store nans into table
+                self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
+                    [math.nan, math.nan, likelihood]
+                label_deleted = True
+                self.mdf_modified[self.current_frame] = True
 
-            for i_sco in scorer:
-                for i_ind in individuals:
-                    for i_bod in bodyparts:
-                        [tab_x, tab_y, likelihood] = mdf.loc[idx[current_frame],
-                                                             idx[i_sco, i_ind, i_bod, :]].to_numpy()
-                        if i_ind == 'sub1':
-                            color = green
-                        if i_ind == 'sub2':
-                            color = red
+        # Draw circle or cross point as marker on video
+            if not label_deleted:
+                # differential color for each animal
+                if i_ind == 'sub1':
+                    color = (0, 255, 0)
+                elif i_ind == 'sub2':
+                    color = (0, 0, 255)
+                # circle for low p value inferred markers
+                if float(likelihood) < 0.011:
+                    cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                               thickness=1, lineType=8, shift=0)
+                # thick cross point for >= p_value, thin one for < p_value
+                else:
+                    if float(likelihood) >= self.p_value:
+                        thickness = 1
+                    else:
+                        thickness = 2
 
-                        lines_pos = lines_pos + lines_add
-                        id_n = id_n + 1
-                        text = str(id_n)+": "+i_ind+","+i_bod+": "
-                        cv2.putText(coords_blank, text, (20, lines_pos),
-                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+                    cv2.line(self.img, (dis_x+self.length, dis_y+self.length),
+                             (dis_x-self.length, dis_y-self.length), color, thickness)
+                    cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
+                             (dis_x-self.length, dis_y+self.length), color, thickness)
 
-                        text = str(tab_x)+"   "+str(tab_y) + \
-                            "   "+str(likelihood)
-                        cv2.putText(coords_blank, text, (200, lines_pos),
-                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+    def freezing_panel(self):
+        '''
+        # display freezing state panel
+        '''
+        # at the video frame for entering freezing, set self.freeze_flag True
+        if self.freeze_flag_on_frame == self.current_frame:
+            if self.freeze_sub == -1:
+                self.freeze_flag_on_frame = -1
+            else:
+                self.freeze_flag = True
 
-            cv2.imshow('coords', coords_blank)
+        # at the video frame for exiting freezing (frame where animal starts to move),
+        # set the flag False, and set True for the freezing duration
+        if self.freeze_flag_off_frame == self.current_frame:
+            if self.freeze_sub == -1:
+                self.freeze_flag_off_frame = -1
 
-            # show video frame
-            cv2.imshow('image', img)
+            elif self.freeze_flag:
+                self.freeze_flag = False
+                for i in range(self.freeze_flag_on_frame, self.freeze_flag_off_frame):
+                    self.freeze[i, self.freeze_sub] = True
 
-            # Read key input
-            status_new = status_list[cv2.waitKey(1)]
+                self.freeze_flag_on_frame = -1
+                self.freeze_flag_off_frame = -1
 
-            if status_new != 'no_key_press':
-                status_pre = status
-                status = status_new
+        # whenever erase is pressed, freeze_flag reset (previous freeze annotation is lost),
+        # remove True value from the self.freeze
+        if self.freeze_flag_erase_frame == self.current_frame:
+            if self.freeze_sub == -1:
+                self.freeze_flag_off_frame = -1
+            else:
+                self.freeze_flag = False
+                self.freeze_flag_on_frame = -1
+                self.freeze_flag_off_frame = -1
+                self.freeze[self.current_frame, self.freeze_sub] = False
 
-            if status == 'play':
-                frame_rate = cv2.getTrackbarPos('F', 'image')
-                if frame_rate == 0.0:
-                    continue
-                if (time.time() - start_time) > 1.0/frame_rate:
-                    real_frame_rate = round(1.0/(time.time() - start_time), 2)
-                    current_frame += 1
-                    cv2.setTrackbarPos('S', 'image', current_frame)
-                    start_time = time.time()
-                    continue
-            elif status == 'stop':
-                current_frame = cv2.getTrackbarPos('S', 'image')
-            elif status == 'prev_frame':
-                current_frame -= 1
-                if current_frame < 0:
-                    current_frame = tots-1
-                cv2.setTrackbarPos('S', 'image', current_frame)
-                status = 'stop'
-            elif status == 'next_frame':
-                current_frame += 1
-                if current_frame == tots:
-                    current_frame = 0
-                cv2.setTrackbarPos('S', 'image', current_frame)
-                status = 'stop'
-            elif status == 'slow':
-                frame_rate = max(frame_rate - 1, 0)
-                cv2.setTrackbarPos('F', 'image', frame_rate)
-                status = status_pre
-            elif status == 'fast':
-                frame_rate = min(100, frame_rate+1)
-                cv2.setTrackbarPos('F', 'image', frame_rate)
-                status = status_pre
-            elif status == 'drag_mode':
-                mode = 'drag_mode'
-                status = status_pre
-            elif status == 'target_sub1':
-                target_freeze = 0
-                status = status_pre
-            elif status == 'target_sub2':
-                target_freeze = 1
-                status = status_pre
-            elif status == 'start_freezing':
-                # freeze_state = True
-                freeze_modify_on_frame = current_frame
-                status = status_pre
-            elif status == 'end_freezing':
-                # freeze_state = False
-                freeze_modify_off_frame = current_frame
-                status = status_pre
-            elif status == 'jump_nan':
-                status = 'stop'
-                current_frame = jump_nan(mdf, current_frame)
-                cv2.setTrackbarPos('S', 'image', current_frame)
-            elif status == 'p_value':
-                status = 'stop'
-                print("Please input p_value threshould: ", end='')
-                p_value = float(input())
-            # elif status == 'snap':
-            #     cv2.imwrite("./"+"Snap_"+str(i)+".png", img)
-            #     print("Snap of Frame", current_frame, "Taken!")
-            #     status = 'stop'
-            elif status[0] == 'add':
-                # print(status[0])
-                add_label(mdf, mdf_modified, current_frame,
-                          scorer[0], status[1], status[2])
-                status = 'stop'
-            elif status == 'reset_to_original':
-                reset_to_original(mdf, mdf_org, mdf_modified, current_frame)
-                status = 'stop'
-            elif status == 'exit':
-                break
+        # display premade panel image on freezing panel
+        for i in range(2):
+            if self.freeze_flag and self.freeze_sub == i:
+                #print('freeze', i)
+                cv2.imshow(self.sub_freeze[i], self.freeze_sign)
+            elif self.freeze[self.current_frame, i]:
+                #print('freeze', i)
+                cv2.imshow(self.sub_freeze[i], self.freeze_sign)
+            else:
+                #print('no_freeze', i)
+                cv2.imshow(self.sub_freeze[i], self.no_freeze_sign)
 
-        except KeyError:
-            print("Invalid Key was pressed")
+    def coordinate_panel(self):
+        '''
+        coordinate_panel
+        '''
+        # display coordinates on coordinate panel
+        # Create new blank image
+        width, height = 400, 180
+        # white = (255, 255, 255)
+        black = (0, 0, 0)
+        coords_blank = create_blank(width, height, rgb_color=black)
 
-    # write file for trajectory and freezing
-    write_traj(width, half_dep, l1_coord, l2_coord,
-               l4_coord, tots, xy1, xy2, freeze, video)
+        lines_pos = 0
+        lines_add = 20
+        id_n = 0
 
-    # write file for freeze start, end duration
-    write_freeze(tots, freeze, video)
+        for i_sco in self.scorer:
+            for i_ind in self.individuals:
+                for i_bod in self.bodyparts:
+                    [tab_x, tab_y, likelihood] = self.mdf.loc[self.idx[self.current_frame],
+                                                              self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+                    if i_ind == 'sub1':
+                        color = self.green
+                    if i_ind == 'sub2':
+                        color = self.red
 
-    # Write h5 file for extracted frames
-    tz_ny = pytz.timezone('America/New_York')
-    now = datetime.now(tz_ny)
-    extrxt_dir = os.path.join(
-        './', now.strftime("%Y%m%d-%H%M%S") + '-extracted')
-    if not os.path.isdir(extrxt_dir):
-        os.mkdir(extrxt_dir)
+                    lines_pos = lines_pos + lines_add
+                    id_n = id_n + 1
+                    text = str(id_n)+": "+i_ind+","+i_bod+": "
+                    cv2.putText(coords_blank, text, (20, lines_pos),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
 
-    mdf[mdf_modified].to_hdf(extrxt_dir+'/extracted.h5',
-                             key='df_output', mode='w')
+                    text = str(tab_x)+"   "+str(tab_y) + \
+                        "   "+str(likelihood)
+                    cv2.putText(coords_blank, text, (200, lines_pos),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+        # display on the panel
+        cv2.imshow('coords', coords_blank)
 
-    # Extract frames modified
-    for frame in range(tots):
-        if mdf_modified[frame]:
-            print("frame = ", frame, " is modified", end=": ")
-            # read one video frame
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
-            _ret, img = cap.read()
-            cv2.imwrite(extrxt_dir+"/img" +
-                        "{:03d}".format(frame)+".png", img)
-            print("Snap of Frame", frame, "Taken!")
+    def key_comm(self, status_new):
+        '''
+        key_comm
+        '''
 
-    # Clean up windows
-    cap.release()
-    cv2.destroyAllWindows()
+        if status_new != 'no_key_press':
+            status_pre = self.status
+            self.status = status_new
+
+        # video play mode
+        if self.status == 'play':
+            self.frame_rate = cv2.getTrackbarPos('F', 'image')
+
+            # when frame_rate is 0, do nothing
+            if self.frame_rate == 0.0:
+                pass
+            # count up frame number only when it passese more than 1.0/frame_rate
+            elif (time.time() - self.start_time) > 1.0/self.frame_rate:
+                self.real_frame_rate = round(
+                    1.0/(time.time() - self.start_time), 2)
+                self.current_frame += 1
+                cv2.setTrackbarPos('S', 'image', self.current_frame)
+                self.start_time = time.time()
+
+        # video stop mode
+        elif self.status == 'stop':
+            self.current_frame = cv2.getTrackbarPos('S', 'image')
+
+        # goto previous frame
+        elif self.status == 'prev_frame':
+            self.current_frame -= 1
+            if self.current_frame < 0:
+                self.current_frame = self.tots-1
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+            self.status = 'stop'
+
+        # goto next frame
+        elif self.status == 'next_frame':
+            self.current_frame += 1
+            if self.current_frame == self.tots:
+                self.current_frame = 0
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+            self.status = 'stop'
+
+        # slow down playing speed
+        elif self.status == 'slow':
+            self.frame_rate = max(self.frame_rate - 1, 0)
+            cv2.setTrackbarPos('F', 'image', self.frame_rate)
+            self.status = status_pre
+
+        # speed up playing speed
+        elif self.status == 'fast':
+            self.frame_rate = min(100, self.frame_rate+1)
+            cv2.setTrackbarPos('F', 'image', self.frame_rate)
+            self.status = status_pre
+
+        # elif self.status == 'drag_mode':
+        #     self.mode = 'drag_mode'
+        #     status = status_pre
+
+        # target for anotating freeze to sub1
+        elif self.status == 'target_sub1':
+            self.freeze_sub = 0
+            self.status = status_pre
+
+        # target for anotating freeze to sub2
+        elif self.status == 'target_sub2':
+            self.freeze_sub = 1
+            self.status = status_pre
+
+        # annotate start_freezing
+        elif self.status == 'start_freezing':
+            # freeze_state = True
+            self.freeze_flag_on_frame = self.current_frame
+            self.status = status_pre
+
+        # annotate end_freezing
+        elif self.status == 'end_freezing':
+            # freeze_state = False
+            self.freeze_flag_off_frame = self.current_frame
+            self.status = status_pre
+
+        # erase freeze annotate
+        elif self.status == 'erase_freezing':
+            # freeze_state = False
+            self.freeze_flag_erase_frame = self.current_frame
+            self.status = status_pre
+
+        # go to the next frame with nan value
+        elif self.status == 'jump_nan':
+            self.status = 'stop'
+            self.current_frame = self.jump_nan()
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+
+        # set the p_value to change thickness of cross marker
+        elif self.status == 'p_value':
+            self.status = 'stop'
+            print("Please input p_value threshould: ", end='')
+            self.p_value = float(input())
+
+        # snap the current frame to file
+        # elif status == 'snap':
+        #     cv2.imwrite("./"+"Snap_"+str(i)+".png", img)
+        #     print("Snap of Frame", current_frame, "Taken!")
+        #     status = 'stop'
+
+        # add bodypart marker which is missing
+        elif self.status[0] == 'add':
+            # print(status[0])
+            self.add_label(self.scorer[0], self.status[1], self.status[2])
+            self.status = 'stop'
+
+        # go back to original coordiante for a bodypart marker which is moved
+        elif self.status == 'reset_to_original':
+            self.reset_to_original()
+            self.status = 'stop'
+
+        elif self.status == 'exit':
+            return True
+
+        return False
+
+    def jump_nan(self):
+        '''
+        jump_nan
+        '''
+        # idx = pd.IndexSlice     # Initialize the IndexSlice
+
+        find = False
+
+        # generate array for total number of nan value for each video frame
+        column_nan = np.array(
+            [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
+             for y in range(len(self.mdf.index))])
+
+        # current video frame position is at the end of video, do nothing
+        if self.current_frame == len(self.mdf.index)-1:
+            frame = self.current_frame
+        # current position in the middle of vidoe
+        else:
+            # scan from current position to the end of video
+            for frame in range(self.current_frame+1, len(self.mdf.index)):
+                if column_nan[frame] > 0:
+                    print('frame '+str(frame)+' contains nan')
+                    find = True
+                    break
+            # scan from the beginning to the current position
+            if not find:
+                for frame in range(0, self.current_frame+1):
+                    if column_nan[frame] > 0:
+                        print('frame '+str(frame)+' contains nan')
+                        # find = True
+                        break
+        return frame
+
+    def reset_to_original(self):
+        '''
+        reset_to_original
+        '''
+        for i_sco in self.scorer:
+            for i_ind in self.individuals:
+                for i_bod in self.bodyparts:
+                    self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
+                        self.mdf_org.loc[self.idx[self.current_frame],
+                                         self.idx[i_sco, i_ind, i_bod, :]]
+
+        self.mdf_modified[self.current_frame] = False
+
+    def add_label(self, i_sco, i_ind, i_bod):
+        '''
+        add_label
+        '''
+
+        # Store the mouse pointer position into table
+        self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
+            [100.0, 100.0, 1.0]
+        self.mdf_modified[self.current_frame] = True
+        print('one label is added')
+
+    def main_loop(self):
+        '''
+        Main loop
+        '''
+        while True:
+            try:
+                # If reach to the end, play from the begining
+                # if current_frame==tots-1:
+                if self.current_frame == self.tots:
+                    self.current_frame = 0
+
+                # read a video frame
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+                _ret, self.img = self.cap.read()
+
+                # resize video
+                self.img = cv2.resize(self.img, self.dim,
+                                      interpolation=cv2.INTER_AREA)
+
+                # display current state and real frame rate in the video
+                im_text1 = "video_status: " + self.status + ", frame_rate: " + \
+                    str(self.real_frame_rate) + " fps"
+                im_text2 = "nmode: " + self.mode + \
+                    ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
+                    ", freeze_flag: " + str(self.freeze_flag)
+
+                # add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+                # add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+                add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+                add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+
+                # Display markers for each bodyparts
+                # Loop for all bodyparts
+                #   scorer -> individuals -> bodyparts
+                for i_sco in self.scorer:
+                    for i_ind in self.individuals:
+                        for i_bod in self.bodyparts:
+                            self.disp_marker(i_sco, i_ind, i_bod)
+
+                # show video frame
+                cv2.imshow('image', self.img)
+
+                # display freezing state panel
+                self.freezing_panel()
+
+                # display coordinates and p_value on coordinate panel
+                self.coordinate_panel()
+
+                # keyborad command
+                # Read key input
+                status_new = self.status_list[cv2.waitKey(1)]
+                if self.key_comm(status_new):
+                    break
+
+            except KeyError:
+                print("Invalid Key was pressed")
+
+
+def create_blank(width, height, rgb_color=(0, 0, 0)):
+    """
+    Create new image(numpy array) filled with certain color in RGB
+    """
+    # Create black blank image
+    image = np.zeros((height, width, 3), np.uint8)
+
+    # Since OpenCV uses BGR, convert the color first
+    color = tuple(reversed(rgb_color))
+    # Fill image with color
+    image[:] = color
+
+    return image
+
+
+def add_text(img, text, text_top, image_scale):
+    """
+    Args:
+        img (numpy array of shape (width, height, 3): input image
+        text (str): text to add to image
+        text_top (int): position of top text to add
+        image_scale (float): image resize scale
+
+    Summary:
+        Add display text to a frame.
+
+    Returns:
+        Next available position of top text (allows for chaining this function)
+    """
+    cv2.putText(
+        img=img,
+        text=text,
+        org=(0, text_top),
+        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+        fontScale=image_scale,
+        color=(0, 255, 255),
+        thickness=2)
+    return text_top + int(5 * image_scale)
 
 
 def write_freeze(tots, freeze, video):
@@ -550,78 +857,6 @@ def write_freeze(tots, freeze, video):
     write_pd2csv(path, filename, df_output, column_name, column_type, 1000)
 
 
-def create_blank(width, height, rgb_color=(0, 0, 0)):
-    """Create new image(numpy array) filled with certain color in RGB"""
-    # Create black blank image
-    image = np.zeros((height, width, 3), np.uint8)
-
-    # Since OpenCV uses BGR, convert the color first
-    color = tuple(reversed(rgb_color))
-    # Fill image with color
-    image[:] = color
-
-    return image
-
-
-def reset_to_original(mdf, mdf_org, mdf_modified, current_frame):
-    '''
-    reset_to_original
-    '''
-    scorer = mdf.columns.unique(level='scorer').to_numpy()
-    individuals = mdf.columns.unique(level='individuals').to_numpy()
-    bodyparts = mdf.columns.unique(level='bodyparts').to_numpy()
-    idx = pd.IndexSlice     # Initialize the IndexSlice
-
-    for i_sco in scorer:
-        for i_ind in individuals:
-            for i_bod in bodyparts:
-                mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
-                    mdf_org.loc[idx[current_frame],
-                                idx[i_sco, i_ind, i_bod, :]]
-
-    mdf_modified[current_frame] = False
-
-
-def jump_nan(mdf, current_frame):
-    '''
-    jump_nan
-    '''
-    idx = pd.IndexSlice     # Initialize the IndexSlice
-    find = False
-    column_nan = np.array(
-        [mdf.loc[idx[y], idx[:, :, :, :]].isnull().sum() for y in range(len(mdf.index))])
-
-    if current_frame == len(mdf.index)-1:
-        frame = current_frame
-    else:
-        for frame in range(current_frame+1, len(mdf.index)):
-            if column_nan[frame] > 0:
-                print('frame '+str(frame)+' contains nan')
-                find = True
-                break
-        if not find:
-            for frame in range(0, current_frame+1):
-                if column_nan[frame] > 0:
-                    print('frame '+str(frame)+' contains nan')
-                    find = True
-                    break
-
-    return frame
-
-
-def add_label(mdf, mdf_modified, current_frame, i_sco, i_ind, i_bod):
-    '''
-    add_label
-    '''
-    idx = pd.IndexSlice     # Initialize the IndexSlice
-
-    # Store the mouse pointer position into table
-    mdf.loc[idx[current_frame], idx[i_sco, i_ind, i_bod, :]] = \
-        [100.0, 100.0, 1.0]
-    mdf_modified[current_frame] = True
-    print('one label is added')
-
-
 def write_pd2csv(path, filename, df_output, column_name, column_type, _mlw=1000):
     '''
     write_pd2csv
@@ -665,68 +900,6 @@ def preprocess_output_str(output_str, data, column_type, mlw=1000):
         output_str = output_str + str(data) + ','
 
     return output_str
-
-
-def dragging(event, read_x, read_y, _flags, _param):
-    '''
-    dragging
-
-    Mouse events handler
-    '''
-    global cur_x, cur_y, drag, rclick, mode, pixel_limit
-    if event == cv2.EVENT_LBUTTONDOWN:
-        if mode == 'drag_mode':
-            drag = True
-            cur_x, cur_y = read_x, read_y
-    elif event == cv2.EVENT_LBUTTONUP:
-        drag = False
-    elif event == cv2.EVENT_MOUSEMOVE:
-        if drag:
-            cur_x, cur_y = read_x, read_y
-    elif event == cv2.EVENT_RBUTTONDOWN:
-        cur_x, cur_y = read_x, read_y
-        rclick = True
-    elif event == cv2.EVENT_RBUTTONUP:
-        rclick = False
-
-
-def flick(_x):
-    '''
-    flick
-    '''
-    # pass
-
-
-# def process(img):
-#     '''
-#     process
-#     '''
-#     return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
-
-def add_text(img, text, text_top, image_scale):
-    """
-    Args:
-        img (numpy array of shape (width, height, 3): input image
-        text (str): text to add to image
-        text_top (int): position of top text to add
-        image_scale (float): image resize scale
-
-    Summary:
-        Add display text to a frame.
-
-    Returns:
-        Next available position of top text (allows for chaining this function)
-    """
-    cv2.putText(
-        img=img,
-        text=text,
-        org=(0, text_top),
-        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-        fontScale=image_scale,
-        color=(0, 255, 255),
-        thickness=2)
-    return text_top + int(5 * image_scale)
 
 
 def read_traj(video):
@@ -877,8 +1050,9 @@ def write_traj(width, half_dep, l1_coord, l2_coord, l4_coord, tots, xy1, xy2, fr
 
 if __name__ == '__main__':
 
-    input_h5_path = r'W:\videos_synchrony\20200713\m154DLC_resnet50_test01Dec21shuffle1_100000.h5'
+    input_h5_path = r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5'
     input_video = r'm154.mp4'
     input_mag_factor = 2
 
-    edit_labels(input_h5_path, input_video, input_mag_factor)
+    el = EditLabels(input_h5_path, input_video, input_mag_factor)
+    el.edit_labels()
