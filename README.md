@@ -7,7 +7,7 @@ Using the basic framework from maximus009/VideoPlayer<BR>
 
 
 ### Interface:
-#### Video control
+#### video control
     w: start palying
     s: stop playing
     a: step back a frame
@@ -23,7 +23,7 @@ Using the basic framework from maximus009/VideoPlayer<BR>
     <number>: add bodypart (see number for each bodypart in the coordinate window)
     p: set p_value, which set the boundary between thick and thin cross marking
 
-#### anotating freeze
+#### annotate freezing
     !: target sub1
     @: target sub2
     j: freezing start, freeze_flag on (first video frame for freeze)
