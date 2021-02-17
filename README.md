@@ -13,7 +13,6 @@ Simple editor to create/edit bodypart lables for DeepLabCut
 Using the basic framework from maximus009/VideoPlayer<BR>
     https://github.com/maximus009/VideoPlayer
 
-
 ## Interface:
 #### video control
     w: start palying
@@ -40,4 +39,6 @@ Using the basic framework from maximus009/VideoPlayer<BR>
 
 #### mode change
     0: drug mode
+
+## Install env:
 
