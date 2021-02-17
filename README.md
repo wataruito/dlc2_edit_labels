@@ -16,8 +16,8 @@ Interface:
     <space>: go to next frame containing nan value
 
 <marker manipulation>
-    left hold drag: drag a marker
-    right click: delete a marker
+    (left hold drag): drag a marker
+    (right click): delete a marker
     r: back to the inferring coords
     <number>: add bodypart (see number for each bodypart in the coordinate window)
     p: set p_value, which set the boundary between thick and thin cross marking
