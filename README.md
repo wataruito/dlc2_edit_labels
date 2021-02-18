@@ -2,7 +2,8 @@
  
 Simple editor to create/edit bodypart lables for DeepLabCut
 - Read a inferred output (like *_resnet50_test01Dec21shuffle1_100000.h5) and movie (*.mp4)
-- Display video and markers for inferred bodyparts
+- Display video and markers for inferred bodyparts<BR>
+    circle <0.011, thick cross < (adjustable, defalut=0.9) > thin cross
 - The markers can be dragged freely
 - Add manual annotation for freezing for each mouse
 - Output only the frames and bodypart coordinates that are modified
