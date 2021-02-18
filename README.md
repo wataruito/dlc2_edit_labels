@@ -13,6 +13,41 @@ Simple editor to create/edit bodypart lables for DeepLabCut
 Using the basic framework from maximus009/VideoPlayer<BR>
     https://github.com/maximus009/VideoPlayer
 
+
+## Procedures:
+#### Step0: Annotate freezing
+
+    Read video
+    |
+    Annotate freezing
+    |
+    Output trajectory and freezing file (*_trajectory_freezing.csv, *_freezing.csv)
+
+
+#### Step1: Scan bad prediction from the entire video
+
+    Read DeepLabCut inferring output, Video
+    |
+    Select frame with false prediction
+    |
+    Output dlc2_edit_labels output file
+     frame#, coordinates, description (history etc.)
+
+#### Step2: Merge the selected bad frame with the previous training dataset
+
+    Read DeepLabCut training dataset, like “CollectedData_wataru.h5”
+    |
+    Merge into the internal dlc2_edit_labels data frame
+     frame#, coordinates, description (history etc.)
+    |
+    Add/drop frame and edit coordinate
+    |
+    Output 
+    1. dlc2_edit_labels output file
+     frame#, coordinates, description (history etc.)|
+    2. DeepLabCut training dataset, like “CollectedData_wataru.h5”
+    3. corresponding video frames
+
 ## Interface:
 #### video control
     w: start palying
