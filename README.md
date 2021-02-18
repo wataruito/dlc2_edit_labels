@@ -10,7 +10,7 @@ Simple editor to create/edit bodypart lables for DeepLabCut
 #### Not implimented yet
 - Merge with existing training dataset and relabel them if need
 
-Using the basic framework from maximus009/VideoPlayer<BR>
+Using the basic code from maximus009/VideoPlayer<BR>
     https://github.com/maximus009/VideoPlayer
 
 
