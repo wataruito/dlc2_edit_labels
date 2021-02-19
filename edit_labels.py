@@ -44,6 +44,7 @@ import numpy as np
 import pandas as pd
 import cv2
 import pytz
+import re
 
 
 class EditLabels():
@@ -51,13 +52,15 @@ class EditLabels():
     EditLabels
     '''
 
-    def __init__(self, h5_path, video, mag_factor):
+    def __init__(self, h5_path='', video='', mag_factor=1, old_train='', new_extracted=''):
         '''
         '''
 
         self.h5_path = h5_path              # DeepLabCut inferring result file
         self.video = video                  # video path
         self.mag_factor = mag_factor        # magnifying video
+        self.old_train = old_train
+        self.new_extracted = new_extracted
 
         self.status_list = []               # key command list
 
@@ -125,20 +128,31 @@ class EditLabels():
         '''
         video_cursor
         '''
-        # global cur_x, cur_y, drag, rclick, mode, pixel_limit
+        # (Case1) Selct outlier frames from the entire video
+        if self.h5_path != '' and self.video != '' and \
+                self.old_train == '' and self.new_extracted == '':
 
-        self.initialize_param()
-        self.initialize_windows()
+            self.initialize_data_1()
+            self.initialize_windows_1()
 
-        self.main_loop()
+            self.main_loop_1()
 
-        self.output_files()
+            self.output_files_1()
+
+        # (Case2) Merge extracted outlier frames with the previous training dataset
+        if self.h5_path == '' and self.video != '' and \
+                self.old_train != '' and self.new_extracted != '':
+
+            self.initialize_data_2()
+            self.initialize_windows_2()
+
+            self.main_loop_2()
 
         # Clean up windows
         self.cap.release()
         cv2.destroyAllWindows()
 
-    def output_files(self):
+    def output_files_1(self):
         '''
         output_files
         '''
@@ -199,7 +213,7 @@ class EditLabels():
         elif event == cv2.EVENT_RBUTTONUP:
             self.rclick = False
 
-    def initialize_windows(self):
+    def initialize_windows_1(self):
         '''
         initialize_windows
         '''
@@ -211,9 +225,9 @@ class EditLabels():
         cv2.setMouseCallback('image', self.mouse_call_back)
 
         # Open video file
-        self.cap = cv2.VideoCapture(self.video)
+        # self.cap = cv2.VideoCapture(self.video)
         # Get the total number of frame
-        self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         # Add two slider bars
         # for frame position
@@ -251,7 +265,59 @@ class EditLabels():
         cv2.namedWindow('coords')
         cv2.moveWindow('coords', 1000, 50)
 
-    def initialize_param(self):
+    def initialize_windows_2(self):
+        '''
+        initialize_windows
+        '''
+        ###################################
+        # Initialize main video windows
+        cv2.namedWindow('image')
+        cv2.moveWindow('image', 250, 300)
+        # Set mouse callback
+        cv2.setMouseCallback('image', self.mouse_call_back)
+
+        # Open video file
+        # self.cap = cv2.VideoCapture(self.video)
+        # Get the total number of frame
+        # self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Add two slider bars
+        # for frame position
+        cv2.createTrackbar('S', 'image', 0, int(self.tots)-1, self.flick)
+        cv2.setTrackbarPos('S', 'image', 0)
+        # for play speed (fps)
+        cv2.createTrackbar('F', 'image', 1, 100, self.flick)
+        cv2.setTrackbarPos('F', 'image', self.frame_rate)
+        # cv2.setTrackbarPos('F','image',0)
+
+        # ##################################
+        # # Initialize freeze indicator window for each subject
+        # self.sub_freeze = ['sub1_freeze', 'sub2_freeze']
+        # # animal 1
+        # cv2.namedWindow(self.sub_freeze[0])
+        # cv2.moveWindow(self.sub_freeze[0], 250, 50)
+        # # animal 2
+        # cv2.namedWindow(self.sub_freeze[1])
+        # cv2.moveWindow(self.sub_freeze[1], 600, 50)
+
+        # # Create image showing freeze/no_freeze
+        # # freeze
+        # width, height = 200, 50
+        # self.freeze_sign = self.create_blank(width, height, rgb_color=self.red)
+        # cv2.putText(self.freeze_sign, "Freeze", (40, 35),
+        #             cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
+        # # no_freeze
+        # self.no_freeze_sign = self.create_blank(
+        #     width, height, rgb_color=self.green)
+        # cv2.putText(self.no_freeze_sign, "No_freeze", (20, 35),
+        #             cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
+
+        ##################################
+        # Initialize display window for bodypart coordinate
+        cv2.namedWindow('coords')
+        cv2.moveWindow('coords', 1000, 50)
+
+    def initialize_data_1(self):
         '''
         initialize_param
         '''
@@ -342,6 +408,113 @@ class EditLabels():
                                  for y in range(self.tots)])
             self.freeze = np.array([[False for x in range(2)]
                                     for y in range(self.tots)])
+
+    def initialize_data_2(self):
+        '''
+        initialize_param
+        '''
+        ###################################
+        # Open video file
+        self.cap = cv2.VideoCapture(self.video)
+        # Get the total number of frame
+        self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+        # Adjust video size according to mag_factor
+        _ret, img = self.cap.read()
+        video_format = img.shape
+        x_pixcels = img.shape[1]
+        y_pixcels = img.shape[0]
+        self.dim = (x_pixcels*self.mag_factor, y_pixcels*self.mag_factor)
+
+        print("video resolution: {}".format(video_format))
+        print("total frame number: {}".format(self.tots))
+
+        ###################################
+        # Read previous DeepLabCut training dataset
+        old = pd.read_hdf(self.old_train)
+        # modify index to int value of frame name
+        new_index = []
+        for i in old.index.tolist():
+            new_index.append(int(re.search('img(.+?).png', i).group(1)))
+        old.index = new_index
+        # Read extracted outlier frames
+        new = pd.read_hdf(self.new_extracted)
+        # Rename column value
+        new = new.rename(
+            columns={'DLC_resnet50_test01Dec21shuffle1_100000': 'wataru'})
+        # Concatenate the two
+        frames = [old, new]
+        self.mdf = pd.concat(frames, keys=['old', 'new'])
+
+        # self.mdf = pd.read_hdf(self.h5_path)
+        self.mdf_org = self.mdf.copy()    # Keep original
+
+        # Extract data from specific levels
+        self.scorer = self.mdf.columns.unique(level='scorer').to_numpy()
+        self.individuals = self.mdf.columns.unique(
+            level='individuals').to_numpy()
+        self.bodyparts = self.mdf.columns.unique(level='bodyparts').to_numpy()
+        self.coords = self.mdf.columns.unique(level='coords').to_numpy()
+        self.mdf_modified = np.array([False for x in range(self.tots)])
+
+        ###################################
+        # keyboard commands
+        self.status_list = {ord('s'): 'stop',
+                            ord('w'): 'play',
+                            ord('a'): 'prev_frame', ord('d'): 'next_frame',
+                            ord('q'): 'slow', ord('e'): 'fast',
+                            ord(' '): 'jump_nan',
+                            # ord('0'): 'drag_mode',
+                            ord('!'): 'target_sub1', ord('@'): 'target_sub2',
+                            ord('j'): 'start_freezing', ord('k'): 'end_freezing',
+                            ord('u'): 'erase_freezing',
+                            ord('p'): 'p_value',
+                            ord('r'): 'reset_to_original',
+                            -1: 'no_key_press',
+                            27: 'exit'}
+
+        # add member of dictionary for keyboard commands
+        bodypart_id = 0
+        for _i_sco in self.scorer:
+            for i_ind in self.individuals:
+                for i_bod in self.bodyparts:
+                    bodypart_id += 1
+                    self.status_list[ord(str(bodypart_id))] = [
+                        'add', i_ind, i_bod]
+
+        # ###################################
+        # # prepare variables to store trajectory and freezing
+        # # if the file ([video]_track_freeze.csv) already exist, read it
+        # path, filename = os.path.split(self.video)
+        # base, _ext = os.path.splitext(filename)
+        # filename = '_' + base + '_track_freeze.csv'
+
+        # if os.path.exists(os.path.join(path, filename)):
+        #     # xy1, xy2, freeze = read_trajectory(video)
+        #     self.width, self.half_dep, self.l1_coord, self.l2_coord, \
+        #         self.l4_coord, self.xy1, self.xy2, self.freeze = self.read_traj(
+        #             self.video)
+
+        #     # idx = pd.IndexSlice
+        #     bodypart = 'snout'
+        #     coords = ['x', 'y']
+        #     self.xy1 = self.mdf.loc[self.idx[:], self.idx[:, 'sub1', bodypart, coords]
+        #                             ].to_numpy().astype(int)*self.mag_factor
+        #     self.xy2 = self.mdf.loc[self.idx[:], self.idx[:, 'sub2', bodypart, coords]
+        #                             ].to_numpy().astype(int)*self.mag_factor
+        # # if not exist, create it
+        # else:
+        #     self.width = 295.0
+        #     self.half_dep = 86.5
+        #     self.l1_coord = [-5, 667]
+        #     self.l2_coord = [42, 486]
+        #     self.l4_coord = [914, 670]
+        #     self.xy1 = np.array([[-1 for x in range(2)]
+        #                          for y in range(self.tots)])
+        #     self.xy2 = np.array([[-1 for x in range(2)]
+        #                          for y in range(self.tots)])
+        #     self.freeze = np.array([[False for x in range(2)]
+        #                             for y in range(self.tots)])
 
     def disp_marker(self, i_sco, i_ind, i_bod):
         '''
@@ -720,7 +893,64 @@ class EditLabels():
         self.mdf_modified[self.current_frame] = True
         print('one label is added')
 
-    def main_loop(self):
+    def main_loop_1(self):
+        '''
+        Main loop
+        '''
+        while True:
+            try:
+                # If reach to the end, play from the begining
+                # if current_frame==tots-1:
+                if self.current_frame == self.tots:
+                    self.current_frame = 0
+
+                # read a video frame
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+                _ret, self.img = self.cap.read()
+
+                # resize video
+                self.img = cv2.resize(self.img, self.dim,
+                                      interpolation=cv2.INTER_AREA)
+
+                # display current state and real frame rate in the video
+                im_text1 = "video_status: " + self.status + ", frame_rate: " + \
+                    str(self.real_frame_rate) + " fps"
+                im_text2 = "nmode: " + self.mode + \
+                    ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
+                    ", freeze_flag: " + str(self.freeze_flag)
+
+                # add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+                # add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+                self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+                self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+
+                # Display markers for each bodyparts
+                # Loop for all bodyparts
+                #   scorer -> individuals -> bodyparts
+                for i_sco in self.scorer:
+                    for i_ind in self.individuals:
+                        for i_bod in self.bodyparts:
+                            self.disp_marker(i_sco, i_ind, i_bod)
+
+                # show video frame
+                cv2.imshow('image', self.img)
+
+                # display freezing state panel
+                self.freezing_panel()
+
+                # display coordinates and p_value on coordinate panel
+                self.coordinate_panel()
+
+                # keyborad command
+                # Read key input
+                status_new = self.status_list[cv2.waitKey(1)]
+                if self.key_comm(status_new):
+                    break
+
+            except KeyError:
+                print("Invalid Key was pressed")
+
+    def main_loop_2(self):
         '''
         Main loop
         '''
@@ -1063,9 +1293,16 @@ class EditLabels():
 
 if __name__ == '__main__':
 
-    input_h5_path = r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5'
-    input_video = r'm154.mp4'
-    input_mag_factor = 2
+    # # for to select outlier frame
+    # input_h5_path = r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5'
+    # input_video = r'm154.mp4'
+    # input_mag_factor = 2
 
-    el = EditLabels(input_h5_path, input_video, input_mag_factor)
+    # for to merge old and new dataset
+    input_video = r'm154.mp4'
+    input_old_train = r'm154\CollectedData_wataru.h5'
+    input_new_extracted = r'm154\20210118-194638-extracted\extracted.h5'
+
+    el = EditLabels(input_h5_path, input_video,
+                    input_mag_factor, input_old_train, input_new_extracted)
     el.edit_labels()
