@@ -40,11 +40,12 @@ import math
 import collections
 import csv
 from datetime import datetime
+import re
 import numpy as np
 import pandas as pd
 import cv2
 import pytz
-import re
+#import tables
 
 
 class EditLabels():
@@ -123,6 +124,9 @@ class EditLabels():
         self.freeze_sign = []
 
         self.img = []
+
+        self.label_versions = []
+        self.label_version = 0
 
     def edit_labels(self, ):
         '''
@@ -317,6 +321,11 @@ class EditLabels():
         cv2.namedWindow('coords')
         cv2.moveWindow('coords', 1000, 50)
 
+        ##################################
+        # Initialize display window for labels at frame #
+        cv2.namedWindow('labels')
+        cv2.moveWindow('labels', 1400, 50)
+
     def initialize_data_1(self):
         '''
         initialize_param
@@ -443,8 +452,13 @@ class EditLabels():
         new = new.rename(
             columns={'DLC_resnet50_test01Dec21shuffle1_100000': 'wataru'})
         # Concatenate the two
-        frames = [old, new]
-        self.mdf = pd.concat(frames, keys=['old', 'new'])
+        # The following sort column by labels
+        # frames = [old, new]
+        # self.mdf = pd.concat(frames, keys=['old', 'new'])
+        # since concat sort along columns, need to preserve original cols and reindex
+        orig_cols = new.columns.to_frame().index
+        self.mdf = pd.concat([old, new], keys=['old', 'new']
+                             ).reindex(orig_cols, axis=1)
 
         # self.mdf = pd.read_hdf(self.h5_path)
         self.mdf_org = self.mdf.copy()    # Keep original
@@ -470,6 +484,7 @@ class EditLabels():
                             ord('u'): 'erase_freezing',
                             ord('p'): 'p_value',
                             ord('r'): 'reset_to_original',
+                            ord('t'): 'toggle_label',
                             -1: 'no_key_press',
                             27: 'exit'}
 
@@ -550,7 +565,7 @@ class EditLabels():
                     [dis_x, dis_y] = [self.cur_x, self.cur_y]
 
                     # Display bodypart text on image
-                    #print('coordinate', dis_x+20, dis_y-20)
+                    # print('coordinate', dis_x+20, dis_y-20)
                     cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
                                 cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
                 else:
@@ -592,6 +607,239 @@ class EditLabels():
                 print('one label is deleted')
                 # Store nans into table
                 self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
+                    [math.nan, math.nan, likelihood]
+                label_deleted = True
+                self.mdf_modified[self.current_frame] = True
+
+        # Draw circle or cross point as marker on video
+            if not label_deleted:
+                # differential color for each animal
+                if i_ind == 'sub1':
+                    color = (0, 255, 0)
+                elif i_ind == 'sub2':
+                    color = (0, 0, 255)
+                # circle for low p value inferred markers
+                if float(likelihood) < 0.011:
+                    cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                               thickness=1, lineType=8, shift=0)
+                # thick cross point for >= p_value, thin one for < p_value
+                else:
+                    if float(likelihood) >= self.p_value:
+                        thickness = 1
+                    else:
+                        thickness = 2
+
+                    cv2.line(self.img, (dis_x+self.length, dis_y+self.length),
+                             (dis_x-self.length, dis_y-self.length), color, thickness)
+                    cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
+                             (dis_x-self.length, dis_y+self.length), color, thickness)
+
+        # read coordinate for the label
+        [tab_x, tab_y, likelihood] = self.mdf.loc[
+            self.idx[self.label_versions[self.label_version],
+                     self.current_frame],
+            self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+        # if value is not empty, display the bodypart marker
+        if not (math.isnan(tab_x) or math.isnan(tab_y)):
+            stored_x = int(tab_x)*self.mag_factor
+            stored_y = int(tab_y)*self.mag_factor
+            label_deleted = False
+
+        # Dragging a bodypart marker
+        # when currently not holding any bodypart
+            if not self.hold_a_bodypart:
+                # If mouse pointer does not hold any bodypart, check the distance
+                # from current mouse pointer coordinate
+                # If less than 10 pixels, then hit the current bodypart
+                if self.drag and math.sqrt((stored_x-self.cur_x)**2 +
+                                           (stored_y-self.cur_y)**2) < self.pixel_limit:
+                    self.hold_a_bodypart = True
+                    self.id_held_bodypart = [i_sco, i_ind, i_bod]
+
+                    # Store the mouse pointer position into table
+                    self.mdf.loc[
+                        self.idx[self.label_versions[self.label_version],
+                                 self.current_frame],
+                        self.idx[i_sco, i_ind, i_bod, :]] = \
+                        [float(self.cur_x)/self.mag_factor,
+                            float(self.cur_y)/self.mag_factor, likelihood]
+                    self.mdf_modified[self.current_frame] = True
+
+                    # Display cross at the mouse pointer position
+                    [dis_x, dis_y] = [self.cur_x, self.cur_y]
+
+                    # Display bodypart text on image
+                    # print('coordinate', dis_x+20, dis_y-20)
+                    cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
+                else:
+                    # Display cross at the store position
+                    [dis_x, dis_y] = [stored_x, stored_y]
+
+        # contining bodypart holding
+            else:
+                # Test if current bodypart is the same to the held bodypart
+                if collections.Counter(self.id_held_bodypart) == \
+                        collections.Counter([i_sco, i_ind, i_bod]):
+                    if self.drag:
+                        # Store the mouse pointer position into table
+                        self.mdf.loc[
+                            self.idx[self.label_versions[self.label_version],
+                                     self.current_frame],
+                            self.idx[i_sco, i_ind, i_bod, :]] = \
+                            [float(self.cur_x)/self.mag_factor,
+                             float(self.cur_y)/self.mag_factor, likelihood]
+                        self.mdf_modified[self.current_frame] = True
+                        # Display cross at the mouse pointer position
+                        [dis_x, dis_y] = [
+                            self.cur_x, self.cur_y]
+                        # Display bodypart text on image
+                        cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
+                    else:
+                        self.hold_a_bodypart = False
+                        # Display cross at the store position
+                        [dis_x, dis_y] = [
+                            stored_x, stored_y]
+                # If different bodypart from the held bodypart
+                else:
+                    # Display cross at the store position
+                    [dis_x, dis_y] = [stored_x, stored_y]
+
+        # Right click to delete the bodypart marker
+            if self.rclick and math.sqrt((stored_x-self.cur_x)**2 +
+                                         (stored_y-self.cur_y)**2) < self.pixel_limit:
+
+                print('one label is deleted')
+                # Store nans into table
+                self.mdf.loc[
+                    self.idx[self.label_versions[self.label_version],
+                             self.current_frame],
+                    self.idx[i_sco, i_ind, i_bod, :]] = \
+                    [math.nan, math.nan, likelihood]
+                label_deleted = True
+                self.mdf_modified[self.current_frame] = True
+
+        # Draw circle or cross point as marker on video
+            if not label_deleted:
+                # differential color for each animal
+                if i_ind == 'sub1':
+                    color = (0, 255, 0)
+                elif i_ind == 'sub2':
+                    color = (0, 0, 255)
+                # circle for low p value inferred markers
+                if float(likelihood) < 0.011:
+                    cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                               thickness=1, lineType=8, shift=0)
+                # thick cross point for >= p_value, thin one for < p_value
+                else:
+                    if float(likelihood) >= self.p_value:
+                        thickness = 1
+                    else:
+                        thickness = 2
+
+                    cv2.line(self.img, (dis_x+self.length, dis_y+self.length),
+                             (dis_x-self.length, dis_y-self.length), color, thickness)
+                    cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
+                             (dis_x-self.length, dis_y+self.length), color, thickness)
+
+    def disp_marker_2(self, i_sco, i_ind, i_bod):
+        '''
+        disp_marker
+        '''
+        # check presence of the lables for each video frame.
+        self.label_versions = [
+            item[0] for item in self.mdf.index.to_list() if item[1] == self.current_frame]
+        if len(self.label_versions) == 0:
+            return
+
+        # if no two label version, set 0; otherwise use the "self.label_version" as it is.
+        if len(self.label_versions) == 1:
+            self.label_version = 0
+
+        # read coordinate for the label
+        [tab_x, tab_y, likelihood] = self.mdf.loc[
+            self.idx[self.label_versions[self.label_version],
+                     self.current_frame],
+            self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+        # if value is not empty, display the bodypart marker
+        if not (math.isnan(tab_x) or math.isnan(tab_y)):
+            stored_x = int(tab_x)*self.mag_factor
+            stored_y = int(tab_y)*self.mag_factor
+            label_deleted = False
+
+        # Dragging a bodypart marker
+        # when currently not holding any bodypart
+            if not self.hold_a_bodypart:
+                # If mouse pointer does not hold any bodypart, check the distance
+                # from current mouse pointer coordinate
+                # If less than 10 pixels, then hit the current bodypart
+                if self.drag and math.sqrt((stored_x-self.cur_x)**2 +
+                                           (stored_y-self.cur_y)**2) < self.pixel_limit:
+                    self.hold_a_bodypart = True
+                    self.id_held_bodypart = [i_sco, i_ind, i_bod]
+
+                    # Store the mouse pointer position into table
+                    self.mdf.loc[
+                        self.idx[self.label_versions[self.label_version],
+                                 self.current_frame],
+                        self.idx[i_sco, i_ind, i_bod, :]] = \
+                        [float(self.cur_x)/self.mag_factor,
+                            float(self.cur_y)/self.mag_factor, likelihood]
+                    self.mdf_modified[self.current_frame] = True
+
+                    # Display cross at the mouse pointer position
+                    [dis_x, dis_y] = [self.cur_x, self.cur_y]
+
+                    # Display bodypart text on image
+                    # print('coordinate', dis_x+20, dis_y-20)
+                    cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
+                else:
+                    # Display cross at the store position
+                    [dis_x, dis_y] = [stored_x, stored_y]
+
+        # contining bodypart holding
+            else:
+                # Test if current bodypart is the same to the held bodypart
+                if collections.Counter(self.id_held_bodypart) == \
+                        collections.Counter([i_sco, i_ind, i_bod]):
+                    if self.drag:
+                        # Store the mouse pointer position into table
+                        self.mdf.loc[
+                            self.idx[self.label_versions[self.label_version],
+                                     self.current_frame],
+                            self.idx[i_sco, i_ind, i_bod, :]] = \
+                            [float(self.cur_x)/self.mag_factor,
+                             float(self.cur_y)/self.mag_factor, likelihood]
+                        self.mdf_modified[self.current_frame] = True
+                        # Display cross at the mouse pointer position
+                        [dis_x, dis_y] = [
+                            self.cur_x, self.cur_y]
+                        # Display bodypart text on image
+                        cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
+                    else:
+                        self.hold_a_bodypart = False
+                        # Display cross at the store position
+                        [dis_x, dis_y] = [
+                            stored_x, stored_y]
+                # If different bodypart from the held bodypart
+                else:
+                    # Display cross at the store position
+                    [dis_x, dis_y] = [stored_x, stored_y]
+
+        # Right click to delete the bodypart marker
+            if self.rclick and math.sqrt((stored_x-self.cur_x)**2 +
+                                         (stored_y-self.cur_y)**2) < self.pixel_limit:
+
+                print('one label is deleted')
+                # Store nans into table
+                self.mdf.loc[
+                    self.idx[
+                        self.label_versions[self.label_version], self.current_frame],
+                    self.idx[
+                        i_sco, i_ind, i_bod, :]] = \
                     [math.nan, math.nan, likelihood]
                 label_deleted = True
                 self.mdf_modified[self.current_frame] = True
@@ -665,13 +913,13 @@ class EditLabels():
         # display premade panel image on freezing panel
         for i in range(2):
             if self.freeze_flag and self.freeze_sub == i:
-                #print('freeze', i)
+                # print('freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.freeze_sign)
             elif self.freeze[self.current_frame, i]:
-                #print('freeze', i)
+                # print('freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.freeze_sign)
             else:
-                #print('no_freeze', i)
+                # print('no_freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.no_freeze_sign)
 
     def coordinate_panel(self):
@@ -692,8 +940,11 @@ class EditLabels():
         for i_sco in self.scorer:
             for i_ind in self.individuals:
                 for i_bod in self.bodyparts:
-                    [tab_x, tab_y, likelihood] = self.mdf.loc[self.idx[self.current_frame],
-                                                              self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+                    [tab_x, tab_y, likelihood] = \
+                        self.mdf.loc[
+                            self.idx[self.label_versions[self.label_version],
+                                     self.current_frame],
+                        self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
                     if i_ind == 'sub1':
                         color = self.green
                     if i_ind == 'sub2':
@@ -711,6 +962,108 @@ class EditLabels():
                                 cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
         # display on the panel
         cv2.imshow('coords', coords_blank)
+
+    def coordinate_panel_2(self):
+        '''
+        coordinate_panel
+        '''
+        # check presence of the lables for each video frame.
+        self.label_versions = [
+            item[0] for item in self.mdf.index.to_list() if item[1] == self.current_frame]
+        # if len(self.label_versions) == 0:
+        #     return
+
+        # if no two label version, set 0; otherwise use the "self.label_version" as it is.
+        if len(self.label_versions) == 1:
+            self.label_version = 0
+
+        # display coordinates on coordinate panel
+        # Create new blank image
+        width, height = 400, 180
+        # white = (255, 255, 255)
+        black = (0, 0, 0)
+        coords_blank = self.create_blank(width, height, rgb_color=black)
+
+        lines_pos = 0
+        lines_add = 20
+        id_n = 0
+
+        for i_sco in self.scorer:
+            for i_ind in self.individuals:
+                for i_bod in self.bodyparts:
+                    if len(self.label_versions) == 0:
+                        [tab_x, tab_y, likelihood] = [
+                            math.nan, math.nan, math.nan]
+                    else:
+                        [tab_x, tab_y, likelihood] = \
+                            self.mdf.loc[
+                                self.idx[self.label_versions[self.label_version],
+                                         self.current_frame],
+                                self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+                    if i_ind == 'sub1':
+                        color = self.green
+                    if i_ind == 'sub2':
+                        color = self.red
+
+                    lines_pos = lines_pos + lines_add
+                    id_n = id_n + 1
+                    text = str(id_n)+": "+i_ind+","+i_bod+": "
+                    cv2.putText(coords_blank, text, (20, lines_pos),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+
+                    # text = str(tab_x)+"   "+str(tab_y) + \
+                    #     "   "+str(likelihood)
+                    text = '{:.1f}'.format(
+                        tab_x)+"  "+'{:.1f}'.format(tab_y)+"  "+'{:.3f}'.format(likelihood)
+
+                    cv2.putText(coords_blank, text, (200, lines_pos),
+                                cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+        # display on the panel
+        cv2.imshow('coords', coords_blank)
+
+    def labels_panel_2(self):
+        '''
+        labels_panel
+        '''
+        # check presence of the lables for each video frame.
+        self.label_versions = [
+            item[0] for item in self.mdf.index.to_list() if item[1] == self.current_frame]
+        # if len(self.label_versions) == 0:
+        #     return
+
+        # if no two label version, set 0; otherwise use the "self.label_version" as it is.
+        if len(self.label_versions) == 1:
+            self.label_version = 0
+
+        # display coordinates on coordinate panel
+        # Create new blank image
+        width, height = 400, 40
+        # white = (255, 255, 255)
+        black = (0, 0, 0)
+        labels_blank = self.create_blank(width, height, rgb_color=black)
+
+        lines_pos = 20
+        # lines_add = 20
+        # id_n = 0
+
+        #print(self.label_versions, len(self.label_versions), self.label_version)
+        text = 'Frame: '+str(self.current_frame) + '  Labels:'
+        word_count = 0
+        for add_text in self.label_versions:
+            if self.label_version == word_count:
+                text = text + '  ' + '#'+add_text+'#'
+            else:
+                text = text + '  '+' '+add_text+' '
+
+            word_count += 1
+
+        color = self.green
+
+        cv2.putText(labels_blank, text, (20, lines_pos),
+                    cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+
+        # display labels panel
+        cv2.imshow('labels', labels_blank)
 
     def key_comm(self, status_new):
         '''
@@ -829,6 +1182,18 @@ class EditLabels():
         # go back to original coordiante for a bodypart marker which is moved
         elif self.status == 'reset_to_original':
             self.reset_to_original()
+            self.status = 'stop'
+
+        # toggle label to be displayed between old and new
+        elif self.status == 'toggle_label':
+            # print('toggle')
+            if len(self.label_versions) == 2:
+                #print('toggle change')
+                if self.label_version == 0:
+                    self.label_version = 1
+                    #print('toggle change')
+                elif self.label_version == 1:
+                    self.label_version = 0
             self.status = 'stop'
 
         elif self.status == 'exit':
@@ -972,14 +1337,14 @@ class EditLabels():
                 # display current state and real frame rate in the video
                 im_text1 = "video_status: " + self.status + ", frame_rate: " + \
                     str(self.real_frame_rate) + " fps"
-                im_text2 = "nmode: " + self.mode + \
-                    ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
-                    ", freeze_flag: " + str(self.freeze_flag)
+                # im_text2 = "nmode: " + self.mode + \
+                #     ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
+                #     ", freeze_flag: " + str(self.freeze_flag)
 
                 # add_text(self.img, im_text1, self.dim[1]-40, 0.5)
                 # add_text(self.img, im_text2, self.dim[1]-20, 0.5)
                 self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
-                self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+                # self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
 
                 # Display markers for each bodyparts
                 # Loop for all bodyparts
@@ -987,16 +1352,19 @@ class EditLabels():
                 for i_sco in self.scorer:
                     for i_ind in self.individuals:
                         for i_bod in self.bodyparts:
-                            self.disp_marker(i_sco, i_ind, i_bod)
+                            self.disp_marker_2(i_sco, i_ind, i_bod)
 
                 # show video frame
                 cv2.imshow('image', self.img)
 
-                # display freezing state panel
-                self.freezing_panel()
+                # # display freezing state panel
+                # self.freezing_panel()
 
                 # display coordinates and p_value on coordinate panel
-                self.coordinate_panel()
+                self.coordinate_panel_2()
+
+                # display labels at frame #
+                self.labels_panel_2()
 
                 # keyborad command
                 # Read key input
@@ -1123,7 +1491,8 @@ class EditLabels():
 
         return width, half_dep, l1_coord, l2_coord, l4_coord, xy1, xy2, freeze
 
-    def write_traj(self, width, half_dep, l1_coord, l2_coord, l4_coord, tots, xy1, xy2, freeze, video):
+    def write_traj(
+            self, width, half_dep, l1_coord, l2_coord, l4_coord, tots, xy1, xy2, freeze, video):
         '''
         # write *_trac_freeze.csv file
         #
@@ -1299,6 +1668,8 @@ if __name__ == '__main__':
     # input_mag_factor = 2
 
     # for to merge old and new dataset
+    input_h5_path = r''
+    input_mag_factor = 2
     input_video = r'm154.mp4'
     input_old_train = r'm154\CollectedData_wataru.h5'
     input_new_extracted = r'm154\20210118-194638-extracted\extracted.h5'
