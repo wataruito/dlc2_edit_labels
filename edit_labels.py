@@ -108,7 +108,8 @@ class EditLabels():
         self.individuals = []
         self.bodyparts = []
         self.coords = []
-        self.mdf_modified = []              # specify modified frames for bodypart coordinates
+        self.mdf_modified = []       # specify frames with modified labels
+        self.mdf_delete_flag = []    # specify deleted labels
 
         self.width = []
         self.half_dep = []
@@ -127,6 +128,8 @@ class EditLabels():
 
         self.label_versions = []
         self.label_version = 0
+
+        self.mdf_labels = []
 
     def edit_labels(self, ):
         '''
@@ -319,12 +322,12 @@ class EditLabels():
         ##################################
         # Initialize display window for bodypart coordinate
         cv2.namedWindow('coords')
-        cv2.moveWindow('coords', 1000, 50)
+        cv2.moveWindow('coords', 500, 50)
 
         ##################################
         # Initialize display window for labels at frame #
         cv2.namedWindow('labels')
-        cv2.moveWindow('labels', 1400, 50)
+        cv2.moveWindow('labels', 900, 50)
 
     def initialize_data_1(self):
         '''
@@ -471,20 +474,50 @@ class EditLabels():
         self.coords = self.mdf.columns.unique(level='coords').to_numpy()
         self.mdf_modified = np.array([False for x in range(self.tots)])
 
+        # create self.mdf_delete_flag
+        self.mdf_delete_flag = pd.Series(False, index=self.mdf.index)
+
+        # create pd for frame#, len(label_versions), label_version
+        column_names = ['frame', 'label_versions', 'label_version']
+        self.mdf_labels = pd.DataFrame(columns=column_names)
+
+        row_id = 0
+        for frame in range(self.tots):
+            label_versions = [item[0]
+                              for item in self.mdf.index.to_list() if item[1] == frame]
+            if len(label_versions) < 2:
+                self.mdf_labels.loc[row_id] = [frame, len(label_versions), 0]
+            else:
+                self.mdf_labels.loc[row_id] = [frame, len(label_versions), 0]
+                row_id = row_id + 1
+                self.mdf_labels.loc[row_id] = [frame, len(label_versions), 1]
+
+            row_id = row_id + 1
+
         ###################################
         # keyboard commands
         self.status_list = {ord('s'): 'stop',
                             ord('w'): 'play',
-                            ord('a'): 'prev_frame', ord('d'): 'next_frame',
-                            ord('q'): 'slow', ord('e'): 'fast',
-                            ord(' '): 'jump_nan',
+                            ord('a'): 'prev_frame',
+                            ord('d'): 'next_frame',
+                            ord('q'): 'slow',
+                            ord('e'): 'fast',
+                            # ord(' '): 'jump_labeled',
                             # ord('0'): 'drag_mode',
-                            ord('!'): 'target_sub1', ord('@'): 'target_sub2',
-                            ord('j'): 'start_freezing', ord('k'): 'end_freezing',
+                            ord('!'): 'target_sub1',
+                            ord('@'): 'target_sub2',
+                            ord('j'): 'start_freezing',
+                            ord('k'): 'end_freezing',
                             ord('u'): 'erase_freezing',
                             ord('p'): 'p_value',
                             ord('r'): 'reset_to_original',
                             ord('t'): 'toggle_label',
+                            ord('x'): 'delete_labels',
+                            ord('X'): 'undelete_labels',
+                            ord(','): 'back_label',
+                            ord('.'): 'forward_label',
+                            # ord('<'): 'back_del_label',
+                            # ord('>'): 'forward_del_label',
                             -1: 'no_key_press',
                             27: 'exit'}
 
@@ -1037,12 +1070,12 @@ class EditLabels():
 
         # display coordinates on coordinate panel
         # Create new blank image
-        width, height = 400, 40
+        width, height = 700, 50
         # white = (255, 255, 255)
         black = (0, 0, 0)
         labels_blank = self.create_blank(width, height, rgb_color=black)
 
-        lines_pos = 20
+        lines_pos = 30
         # lines_add = 20
         # id_n = 0
 
@@ -1050,17 +1083,19 @@ class EditLabels():
         text = 'Frame: '+str(self.current_frame) + '  Labels:'
         word_count = 0
         for add_text in self.label_versions:
+            if self.mdf_delete_flag.loc[
+                    self.idx[add_text, self.current_frame]]:
+                add_text = 'D_'+add_text
             if self.label_version == word_count:
-                text = text + '  ' + '#'+add_text+'#'
+                text = text + '  ' + '#'+add_text
             else:
                 text = text + '  '+' '+add_text+' '
-
             word_count += 1
 
         color = self.green
 
         cv2.putText(labels_blank, text, (20, lines_pos),
-                    cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+                    cv2.FONT_HERSHEY_DUPLEX, 1.0, tuple(reversed(color)))
 
         # display labels panel
         cv2.imshow('labels', labels_blank)
@@ -1161,6 +1196,34 @@ class EditLabels():
             self.current_frame = self.jump_nan()
             cv2.setTrackbarPos('S', 'image', self.current_frame)
 
+        # go to the previous frame with label
+        elif self.status == 'back_label':
+            self.status = 'stop'
+            self.current_frame, self.label_version = self.jump_labeled(-1)
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+
+        # go to the next frame with label
+        elif self.status == 'forward_label':
+            self.status = 'stop'
+            self.current_frame, self.label_version = self.jump_labeled(1)
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+
+        # put delete flag in self.mdf_delete_flag
+        elif self.status == 'delete_labels':
+            self.status = 'stop'
+            self.mdf_delete_flag.loc[
+                self.idx[self.label_versions[self.label_version],
+                         self.current_frame]
+            ] = True
+
+        # remove delete flag in self.mdf_delete_flag
+        elif self.status == 'undelete_labels':
+            self.status = 'stop'
+            self.mdf_delete_flag.loc[
+                self.idx[self.label_versions[self.label_version],
+                         self.current_frame]
+            ] = False
+
         # set the p_value to change thickness of cross marker
         elif self.status == 'p_value':
             self.status = 'stop'
@@ -1233,6 +1296,70 @@ class EditLabels():
                         # find = True
                         break
         return frame
+
+    def jump_labeled_org(self):
+        '''
+        jump_labeled
+        '''
+        find = False
+        # identify row position for current frame and label_version
+        row_id_current = self.mdf_labels.loc[
+            (self.mdf_labels['frame'] == self.current_frame) &
+            (self.mdf_labels['label_version'] == self.label_version)].index.tolist()[0]
+        # print(row_id_current)
+
+        # current video frame position is at the end of video, do nothing
+        if self.current_frame == self.tots - 1:
+            frame = self.current_frame
+            label_version = self.label_version
+
+        # current position in the middle of vidoe
+        else:
+            # scan from current position to the end of video
+            for row_id in range(row_id_current+1, len(self.mdf_labels.index)):
+                # print(row_id)
+                if self.mdf_labels.loc[row_id]['label_versions'] > 0:
+                    frame = self.mdf_labels.loc[row_id]['frame']
+                    label_version = self.mdf_labels.loc[row_id]['label_version']
+                    find = True
+                    # print(row_id)
+                    break
+
+            # scan from the beginning to the current position
+            if not find:
+                for row_id in range(0, row_id_current+1):
+                    if self.mdf_labels.loc[row_id]['label_versions'] > 0:
+                        frame = self.mdf_labels.loc[row_id]['frame']
+                        label_version = self.mdf_labels.loc[row_id]['label_version']
+                        # print(row_id)
+                        break
+
+        return frame, label_version
+
+    def jump_labeled(self, step):
+        '''
+        jump_labeled
+        '''
+        # identify row position for current frame and label_version
+        row_id_current = self.mdf_labels.loc[
+            (self.mdf_labels['frame'] == self.current_frame) &
+            (self.mdf_labels['label_version'] == self.label_version)].index.tolist()[0]
+
+        row_id = row_id_current
+        while True:
+            row_id = row_id + step
+
+            if row_id == len(self.mdf_labels.index):
+                row_id = 0
+            elif row_id < 0:
+                row_id = len(self.mdf_labels.index)-1
+
+            if self.mdf_labels.loc[row_id]['label_versions'] > 0:
+                frame = self.mdf_labels.loc[row_id]['frame']
+                label_version = self.mdf_labels.loc[row_id]['label_version']
+                break
+
+        return frame, label_version
 
     def reset_to_original(self):
         '''
@@ -1320,52 +1447,54 @@ class EditLabels():
         Main loop
         '''
         while True:
+
+            # If reach to the end, play from the begining
+            # if current_frame==tots-1:
+            if self.current_frame == self.tots:
+                self.current_frame = 0
+
+            # read a video frame
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+            _ret, self.img = self.cap.read()
+
+            # resize video
+            self.img = cv2.resize(self.img, self.dim,
+                                  interpolation=cv2.INTER_AREA)
+
+            # display current state and real frame rate in the video
+            im_text1 = "video_status: " + self.status + ", frame_rate: " + \
+                str(self.real_frame_rate) + " fps"
+            # im_text2 = "nmode: " + self.mode + \
+            #     ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
+            #     ", freeze_flag: " + str(self.freeze_flag)
+
+            # add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+            # add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+            self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+            # self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+
+            # Display markers for each bodyparts
+            # Loop for all bodyparts
+            #   scorer -> individuals -> bodyparts
+            for i_sco in self.scorer:
+                for i_ind in self.individuals:
+                    for i_bod in self.bodyparts:
+                        self.disp_marker_2(i_sco, i_ind, i_bod)
+
+            # show video frame
+            cv2.imshow('image', self.img)
+
+            # # display freezing state panel
+            # self.freezing_panel()
+
+            # display coordinates and p_value on coordinate panel
+            self.coordinate_panel_2()
+
+            # display labels at frame #
+            self.labels_panel_2()
+
             try:
-                # If reach to the end, play from the begining
-                # if current_frame==tots-1:
-                if self.current_frame == self.tots:
-                    self.current_frame = 0
-
-                # read a video frame
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-                _ret, self.img = self.cap.read()
-
-                # resize video
-                self.img = cv2.resize(self.img, self.dim,
-                                      interpolation=cv2.INTER_AREA)
-
-                # display current state and real frame rate in the video
-                im_text1 = "video_status: " + self.status + ", frame_rate: " + \
-                    str(self.real_frame_rate) + " fps"
-                # im_text2 = "nmode: " + self.mode + \
-                #     ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
-                #     ", freeze_flag: " + str(self.freeze_flag)
-
-                # add_text(self.img, im_text1, self.dim[1]-40, 0.5)
-                # add_text(self.img, im_text2, self.dim[1]-20, 0.5)
-                self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
-                # self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
-
-                # Display markers for each bodyparts
-                # Loop for all bodyparts
-                #   scorer -> individuals -> bodyparts
-                for i_sco in self.scorer:
-                    for i_ind in self.individuals:
-                        for i_bod in self.bodyparts:
-                            self.disp_marker_2(i_sco, i_ind, i_bod)
-
-                # show video frame
-                cv2.imshow('image', self.img)
-
-                # # display freezing state panel
-                # self.freezing_panel()
-
-                # display coordinates and p_value on coordinate panel
-                self.coordinate_panel_2()
-
-                # display labels at frame #
-                self.labels_panel_2()
-
+                # pass
                 # keyborad command
                 # Read key input
                 status_new = self.status_list[cv2.waitKey(1)]
