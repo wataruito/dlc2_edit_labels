@@ -43,7 +43,7 @@ Using the basic code from maximus009/VideoPlayer<BR>
     |
     Add/drop frame and edit coordinate
     |
-    Output 
+    Output
     1. dlc2_edit_labels output file
      frame#, coordinates, description (history etc.)|
     2. DeepLabCut training dataset, like “CollectedData_wataru.h5”
