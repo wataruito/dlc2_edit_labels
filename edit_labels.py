@@ -1063,7 +1063,7 @@ class EditLabels():
 
 if __name__ == '__main__':
 
-    input_h5_path = r'iteration1\m154DLC_resnet50_test01Dec21shuffle1_100000.h5'
+    input_h5_path = r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5'
     input_video = r'm154.mp4'
     input_mag_factor = 2
 
