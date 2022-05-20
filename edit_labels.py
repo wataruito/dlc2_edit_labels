@@ -15,6 +15,8 @@ Interface:
     q: play faster
     e: play slower
     <space>: go to next frame containing nan value
+    .: goto next label
+    ,: back to previous label
 
 <marker manipulation>
     left hold drag: drag a marker
@@ -22,6 +24,9 @@ Interface:
     r: back to the inferring coords
     <number>: add bodypart (see number for each bodypart in the coordinate window)
     p: set p_value, which set the boundary between thick and thin cross marking
+    t: toggle label from two candidates
+    x: delete label
+    X: undelete label
 
 <anotating freeze>
     !: target sub1
@@ -32,7 +37,9 @@ Interface:
 
 <mode change>
     0: drug mode
+    o: output h5 and frames
 '''
+
 
 import os
 import time
@@ -155,6 +162,8 @@ class EditLabels():
 
             self.main_loop_2()
 
+            self.output_files_2()
+
         # Clean up windows
         self.cap.release()
         cv2.destroyAllWindows()
@@ -191,6 +200,82 @@ class EditLabels():
                 cv2.imwrite(extrxt_dir+"/img" +
                             "{:03d}".format(frame)+".png", img)
                 print("Snap of Frame", frame, "Taken!")
+
+    def output_files_2(self):
+        '''
+        output_files
+        '''
+        # # write file ([video]_track_freeze.csv) for trajectory and freezing
+        # self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
+        #                 self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
+
+        # # write file ([video]_freeze.csv) for freeze start, end duration
+        # self.write_freeze(self.tots, self.freeze, self.video)
+
+        # extract active labeling
+        extracted_mdf = self.mdf
+        extracted_mdf = extracted_mdf.loc[self.mdf_delete_flag[np.invert(
+            self.mdf_delete_flag)].index]
+        # check duplicated labeling
+
+        row_id = 0
+        flag_label_duplicated = False
+        for frame in range(self.tots):
+            # generate list of version name for labeling for each frame
+            label_versions = [item[0]
+                              for item in extracted_mdf.index.to_list() if item[1] == frame]
+            if len(label_versions) == 2:
+                print('Duplicated labels found in frame ', frame)
+                flag_label_duplicated = True
+            row_id = row_id + 1
+
+        if flag_label_duplicated:
+            print('h5 and video fames are not output')
+        else:
+            # outpur h5 file for extracted frames
+            # create directry named after timestamps
+            tz_ny = pytz.timezone('America/New_York')
+            now = datetime.now(tz_ny)
+            extrxt_dir = os.path.join(
+                './', now.strftime("%Y%m%d-%H%M%S") + '-extracted')
+            if not os.path.isdir(extrxt_dir):
+                os.mkdir(extrxt_dir)
+
+            _filename_ext = os.path.basename(self.video)
+            _filename, _ = os.path.splitext(_filename_ext)
+            extrxt_dir = os.path.join(extrxt_dir, _filename)
+            if not os.path.isdir(extrxt_dir):
+                os.mkdir(extrxt_dir)
+
+            # Extract video frames with label
+            for label_index in self.mdf_delete_flag.index.to_list():
+                frame = label_index[1]
+                # read one video frame
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
+                _ret, img = self.cap.read()
+                cv2.imwrite(extrxt_dir+"/img" +
+                            "{:03d}".format(frame)+".png", img)
+                print("Snap of Frame", frame, "Taken!")
+
+            # rename index
+            new_index = []
+            _filename_ext = os.path.basename(self.video)
+            _filename, _ = os.path.splitext(_filename_ext)
+
+            dir_pos = r'labeled-data'
+            file_path = os.path.join(dir_pos, _filename)
+
+            for i in extracted_mdf.index.to_list():
+                new_path = os.path.join(file_path, f'img{i[1]:03}.png')
+                new_index.append(new_path)
+            extracted_mdf.index = new_index
+            # drop likelihood
+            extracted_mdf = extracted_mdf.drop('likelihood', axis=1, level=3)
+            # sort by index
+            extracted_mdf.sort_index(inplace=True)
+            # output to h5 file
+            extracted_mdf.to_hdf(
+                extrxt_dir + '/CollectedData_' + self.scorer[0] + '.h5', key='df_with_missing', mode='w')
 
     def flick(self, _x):
         '''
@@ -476,6 +561,16 @@ class EditLabels():
 
         # create self.mdf_delete_flag
         self.mdf_delete_flag = pd.Series(False, index=self.mdf.index)
+        # mark delete the new in double labeled frame
+        for label_index in self.mdf_delete_flag.index.to_list():
+            frame = label_index[1]
+
+            label_versions = [
+                item[0] for item in self.mdf.index.to_list() if item[1] == frame]
+            if len(label_versions) == 2:
+                self.mdf_delete_flag.loc[
+                    self.idx[label_versions[1], frame]
+                ] = True
 
         # create pd for frame#, len(label_versions), label_version
         column_names = ['frame', 'label_versions', 'label_version']
@@ -483,6 +578,7 @@ class EditLabels():
 
         row_id = 0
         for frame in range(self.tots):
+            # generate list of version name for labeling for each frame
             label_versions = [item[0]
                               for item in self.mdf.index.to_list() if item[1] == frame]
             if len(label_versions) < 2:
@@ -516,6 +612,7 @@ class EditLabels():
                             ord('X'): 'undelete_labels',
                             ord(','): 'back_label',
                             ord('.'): 'forward_label',
+                            ord('o'): 'output_h5_frames',
                             # ord('<'): 'back_del_label',
                             # ord('>'): 'forward_del_label',
                             -1: 'no_key_press',
@@ -667,114 +764,114 @@ class EditLabels():
                     cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
                              (dis_x-self.length, dis_y+self.length), color, thickness)
 
-        # read coordinate for the label
-        [tab_x, tab_y, likelihood] = self.mdf.loc[
-            self.idx[self.label_versions[self.label_version],
-                     self.current_frame],
-            self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
-        # if value is not empty, display the bodypart marker
-        if not (math.isnan(tab_x) or math.isnan(tab_y)):
-            stored_x = int(tab_x)*self.mag_factor
-            stored_y = int(tab_y)*self.mag_factor
-            label_deleted = False
+        # # read coordinate for the label
+        # [tab_x, tab_y, likelihood] = self.mdf.loc[
+        #     self.idx[self.label_versions[self.label_version],
+        #              self.current_frame],
+        #     self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+        # # if value is not empty, display the bodypart marker
+        # if not (math.isnan(tab_x) or math.isnan(tab_y)):
+        #     stored_x = int(tab_x)*self.mag_factor
+        #     stored_y = int(tab_y)*self.mag_factor
+        #     label_deleted = False
 
-        # Dragging a bodypart marker
-        # when currently not holding any bodypart
-            if not self.hold_a_bodypart:
-                # If mouse pointer does not hold any bodypart, check the distance
-                # from current mouse pointer coordinate
-                # If less than 10 pixels, then hit the current bodypart
-                if self.drag and math.sqrt((stored_x-self.cur_x)**2 +
-                                           (stored_y-self.cur_y)**2) < self.pixel_limit:
-                    self.hold_a_bodypart = True
-                    self.id_held_bodypart = [i_sco, i_ind, i_bod]
+        # # Dragging a bodypart marker
+        # # when currently not holding any bodypart
+        #     if not self.hold_a_bodypart:
+        #         # If mouse pointer does not hold any bodypart, check the distance
+        #         # from current mouse pointer coordinate
+        #         # If less than 10 pixels, then hit the current bodypart
+        #         if self.drag and math.sqrt((stored_x-self.cur_x)**2 +
+        #                                    (stored_y-self.cur_y)**2) < self.pixel_limit:
+        #             self.hold_a_bodypart = True
+        #             self.id_held_bodypart = [i_sco, i_ind, i_bod]
 
-                    # Store the mouse pointer position into table
-                    self.mdf.loc[
-                        self.idx[self.label_versions[self.label_version],
-                                 self.current_frame],
-                        self.idx[i_sco, i_ind, i_bod, :]] = \
-                        [float(self.cur_x)/self.mag_factor,
-                            float(self.cur_y)/self.mag_factor, likelihood]
-                    self.mdf_modified[self.current_frame] = True
+        #             # Store the mouse pointer position into table
+        #             self.mdf.loc[
+        #                 self.idx[self.label_versions[self.label_version],
+        #                          self.current_frame],
+        #                 self.idx[i_sco, i_ind, i_bod, :]] = \
+        #                 [float(self.cur_x)/self.mag_factor,
+        #                     float(self.cur_y)/self.mag_factor, likelihood]
+        #             self.mdf_modified[self.current_frame] = True
 
-                    # Display cross at the mouse pointer position
-                    [dis_x, dis_y] = [self.cur_x, self.cur_y]
+        #             # Display cross at the mouse pointer position
+        #             [dis_x, dis_y] = [self.cur_x, self.cur_y]
 
-                    # Display bodypart text on image
-                    # print('coordinate', dis_x+20, dis_y-20)
-                    cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
-                                cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
-                else:
-                    # Display cross at the store position
-                    [dis_x, dis_y] = [stored_x, stored_y]
+        #             # Display bodypart text on image
+        #             # print('coordinate', dis_x+20, dis_y-20)
+        #             cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+        #                         cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
+        #         else:
+        #             # Display cross at the store position
+        #             [dis_x, dis_y] = [stored_x, stored_y]
 
-        # contining bodypart holding
-            else:
-                # Test if current bodypart is the same to the held bodypart
-                if collections.Counter(self.id_held_bodypart) == \
-                        collections.Counter([i_sco, i_ind, i_bod]):
-                    if self.drag:
-                        # Store the mouse pointer position into table
-                        self.mdf.loc[
-                            self.idx[self.label_versions[self.label_version],
-                                     self.current_frame],
-                            self.idx[i_sco, i_ind, i_bod, :]] = \
-                            [float(self.cur_x)/self.mag_factor,
-                             float(self.cur_y)/self.mag_factor, likelihood]
-                        self.mdf_modified[self.current_frame] = True
-                        # Display cross at the mouse pointer position
-                        [dis_x, dis_y] = [
-                            self.cur_x, self.cur_y]
-                        # Display bodypart text on image
-                        cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
-                                    cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
-                    else:
-                        self.hold_a_bodypart = False
-                        # Display cross at the store position
-                        [dis_x, dis_y] = [
-                            stored_x, stored_y]
-                # If different bodypart from the held bodypart
-                else:
-                    # Display cross at the store position
-                    [dis_x, dis_y] = [stored_x, stored_y]
+        # # contining bodypart holding
+        #     else:
+        #         # Test if current bodypart is the same to the held bodypart
+        #         if collections.Counter(self.id_held_bodypart) == \
+        #                 collections.Counter([i_sco, i_ind, i_bod]):
+        #             if self.drag:
+        #                 # Store the mouse pointer position into table
+        #                 self.mdf.loc[
+        #                     self.idx[self.label_versions[self.label_version],
+        #                              self.current_frame],
+        #                     self.idx[i_sco, i_ind, i_bod, :]] = \
+        #                     [float(self.cur_x)/self.mag_factor,
+        #                      float(self.cur_y)/self.mag_factor, likelihood]
+        #                 self.mdf_modified[self.current_frame] = True
+        #                 # Display cross at the mouse pointer position
+        #                 [dis_x, dis_y] = [
+        #                     self.cur_x, self.cur_y]
+        #                 # Display bodypart text on image
+        #                 cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
+        #                             cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
+        #             else:
+        #                 self.hold_a_bodypart = False
+        #                 # Display cross at the store position
+        #                 [dis_x, dis_y] = [
+        #                     stored_x, stored_y]
+        #         # If different bodypart from the held bodypart
+        #         else:
+        #             # Display cross at the store position
+        #             [dis_x, dis_y] = [stored_x, stored_y]
 
-        # Right click to delete the bodypart marker
-            if self.rclick and math.sqrt((stored_x-self.cur_x)**2 +
-                                         (stored_y-self.cur_y)**2) < self.pixel_limit:
+        # # Right click to delete the bodypart marker
+        #     if self.rclick and math.sqrt((stored_x-self.cur_x)**2 +
+        #                                  (stored_y-self.cur_y)**2) < self.pixel_limit:
 
-                print('one label is deleted')
-                # Store nans into table
-                self.mdf.loc[
-                    self.idx[self.label_versions[self.label_version],
-                             self.current_frame],
-                    self.idx[i_sco, i_ind, i_bod, :]] = \
-                    [math.nan, math.nan, likelihood]
-                label_deleted = True
-                self.mdf_modified[self.current_frame] = True
+        #         print('one label is deleted')
+        #         # Store nans into table
+        #         self.mdf.loc[
+        #             self.idx[self.label_versions[self.label_version],
+        #                      self.current_frame],
+        #             self.idx[i_sco, i_ind, i_bod, :]] = \
+        #             [math.nan, math.nan, likelihood]
+        #         label_deleted = True
+        #         self.mdf_modified[self.current_frame] = True
 
-        # Draw circle or cross point as marker on video
-            if not label_deleted:
-                # differential color for each animal
-                if i_ind == 'sub1':
-                    color = (0, 255, 0)
-                elif i_ind == 'sub2':
-                    color = (0, 0, 255)
-                # circle for low p value inferred markers
-                if float(likelihood) < 0.011:
-                    cv2.circle(self.img, (dis_x, dis_y), 10, color,
-                               thickness=1, lineType=8, shift=0)
-                # thick cross point for >= p_value, thin one for < p_value
-                else:
-                    if float(likelihood) >= self.p_value:
-                        thickness = 1
-                    else:
-                        thickness = 2
+        # # Draw circle or cross point as marker on video
+        #     if not label_deleted:
+        #         # differential color for each animal
+        #         if i_ind == 'sub1':
+        #             color = (0, 255, 0)
+        #         elif i_ind == 'sub2':
+        #             color = (0, 0, 255)
+        #         # circle for low p value inferred markers
+        #         if float(likelihood) < 0.011:
+        #             cv2.circle(self.img, (dis_x, dis_y), 10, color,
+        #                        thickness=1, lineType=8, shift=0)
+        #         # thick cross point for >= p_value, thin one for < p_value
+        #         else:
+        #             if float(likelihood) >= self.p_value:
+        #                 thickness = 1
+        #             else:
+        #                 thickness = 2
 
-                    cv2.line(self.img, (dis_x+self.length, dis_y+self.length),
-                             (dis_x-self.length, dis_y-self.length), color, thickness)
-                    cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
-                             (dis_x-self.length, dis_y+self.length), color, thickness)
+        #             cv2.line(self.img, (dis_x+self.length, dis_y+self.length),
+        #                      (dis_x-self.length, dis_y-self.length), color, thickness)
+        #             cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
+        #                      (dis_x-self.length, dis_y+self.length), color, thickness)
 
     def disp_marker_2(self, i_sco, i_ind, i_bod):
         '''
@@ -973,11 +1070,8 @@ class EditLabels():
         for i_sco in self.scorer:
             for i_ind in self.individuals:
                 for i_bod in self.bodyparts:
-                    [tab_x, tab_y, likelihood] = \
-                        self.mdf.loc[
-                            self.idx[self.label_versions[self.label_version],
-                                     self.current_frame],
-                        self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+                    [tab_x, tab_y, likelihood] = self.mdf.loc[self.idx[self.current_frame],
+                                                              self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
                     if i_ind == 'sub1':
                         color = self.green
                     if i_ind == 'sub2':
@@ -995,6 +1089,47 @@ class EditLabels():
                                 cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
         # display on the panel
         cv2.imshow('coords', coords_blank)
+
+    # def coordinate_panel(self):
+    #     '''
+    #     coordinate_panel
+    #     '''
+    #     # display coordinates on coordinate panel
+    #     # Create new blank image
+    #     width, height = 400, 180
+    #     # white = (255, 255, 255)
+    #     black = (0, 0, 0)
+    #     coords_blank = self.create_blank(width, height, rgb_color=black)
+
+    #     lines_pos = 0
+    #     lines_add = 20
+    #     id_n = 0
+
+    #     for i_sco in self.scorer:
+    #         for i_ind in self.individuals:
+    #             for i_bod in self.bodyparts:
+    #                 [tab_x, tab_y, likelihood] = \
+    #                     self.mdf.loc[
+    #                         self.idx[self.label_versions[self.label_version],
+    #                                  self.current_frame],
+    #                     self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+    #                 if i_ind == 'sub1':
+    #                     color = self.green
+    #                 if i_ind == 'sub2':
+    #                     color = self.red
+
+    #                 lines_pos = lines_pos + lines_add
+    #                 id_n = id_n + 1
+    #                 text = str(id_n)+": "+i_ind+","+i_bod+": "
+    #                 cv2.putText(coords_blank, text, (20, lines_pos),
+    #                             cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+
+    #                 text = str(tab_x)+"   "+str(tab_y) + \
+    #                     "   "+str(likelihood)
+    #                 cv2.putText(coords_blank, text, (200, lines_pos),
+    #                             cv2.FONT_HERSHEY_DUPLEX, 0.5, tuple(reversed(color)))
+    #     # display on the panel
+    #     cv2.imshow('coords', coords_blank)
 
     def coordinate_panel_2(self):
         '''
@@ -1259,6 +1394,11 @@ class EditLabels():
                     self.label_version = 0
             self.status = 'stop'
 
+        # output h5 file and frames active
+        elif self.status == 'output_h5_frames':
+            self.output_files_2()
+            self.status = 'stop'
+
         elif self.status == 'exit':
             return True
 
@@ -1354,10 +1494,20 @@ class EditLabels():
             elif row_id < 0:
                 row_id = len(self.mdf_labels.index)-1
 
-            if self.mdf_labels.loc[row_id]['label_versions'] > 0:
+            if self.mdf_labels.loc[row_id]['label_versions'] == 1:
                 frame = self.mdf_labels.loc[row_id]['frame']
                 label_version = self.mdf_labels.loc[row_id]['label_version']
                 break
+            elif self.mdf_labels.loc[row_id]['label_versions'] == 2:
+                if self.mdf_labels.loc[row_id]['label_version'] == 0:
+                    frame = self.mdf_labels.loc[row_id]['frame']
+                    label_version = self.mdf_labels.loc[row_id]['label_version']
+                    break
+
+            # if self.mdf_labels.loc[row_id]['label_versions'] > 0:
+            #     frame = self.mdf_labels.loc[row_id]['frame']
+            #     label_version = self.mdf_labels.loc[row_id]['label_version']
+            #     break
 
         return frame, label_version
 
@@ -1792,16 +1942,18 @@ class EditLabels():
 if __name__ == '__main__':
 
     # # for to select outlier frame
-    # input_h5_path = r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5'
-    # input_video = r'm154.mp4'
-    # input_mag_factor = 2
+    input_h5_path = 'iteration2/m154DLC_resnet50_test01Dec21shuffle1_100000_sk.h5'
+    input_video = 'm154.mp4'
+    input_mag_factor = 2
+    input_old_train = ''
+    input_new_extracted = ''
 
     # for to merge old and new dataset
-    input_h5_path = r''
+    input_h5_path = ''
     input_mag_factor = 2
-    input_video = r'm154.mp4'
-    input_old_train = r'm154\CollectedData_wataru.h5'
-    input_new_extracted = r'm154\20210118-194638-extracted\extracted.h5'
+    input_video = 'm154.mp4'
+    input_old_train = 'm154/CollectedData_wataru.h5'
+    input_new_extracted = 'm154/20210118-194638-extracted/extracted.h5'
 
     el = EditLabels(input_h5_path, input_video,
                     input_mag_factor, input_old_train, input_new_extracted)
