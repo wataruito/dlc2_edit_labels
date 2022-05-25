@@ -253,6 +253,11 @@ class EditLabels():
         cv2.namedWindow('coords')
         cv2.moveWindow('coords', 1000, 50)
 
+        # generate array for total number of nan value for each video frame
+        self.column_nan = np.array(
+            [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
+             for y in range(len(self.mdf.index))])
+
     def initialize_param(self):
         '''
         initialize_param
@@ -673,11 +678,6 @@ class EditLabels():
 
         find = False
 
-        # generate array for total number of nan value for each video frame
-        column_nan = np.array(
-            [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
-             for y in range(len(self.mdf.index))])
-
         # current video frame position is at the end of video, do nothing
         if self.current_frame == len(self.mdf.index)-1:
             frame = self.current_frame
@@ -685,14 +685,14 @@ class EditLabels():
         else:
             # scan from current position to the end of video
             for frame in range(self.current_frame+1, len(self.mdf.index)):
-                if column_nan[frame] > 0:
+                if self.column_nan[frame] > 0:
                     print('frame '+str(frame)+' contains nan')
                     find = True
                     break
             # scan from the beginning to the current position
             if not find:
                 for frame in range(0, self.current_frame+1):
-                    if column_nan[frame] > 0:
+                    if self.column_nan[frame] > 0:
                         print('frame '+str(frame)+' contains nan')
                         # find = True
                         break
