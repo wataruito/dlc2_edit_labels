@@ -1,1 +1,7 @@
 2022*
+.ipynb*
+.vscode
+__pycache__
+_rpicam*
+rpicam*
+
