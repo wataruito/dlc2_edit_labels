@@ -1095,8 +1095,8 @@ class EditLabels():
 
 if __name__ == '__main__':
 
-    input_h5_path = r'Z:\dalton\homecage_videos\black_mice\13_pair\analyzed_videos\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
-    input_video = r'Z:\dalton\homecage_videos\black_mice\13_pair\analyzed_videos\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el_bp_labeled.mp4'
+    input_h5_path = r'rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+    input_video = r'rpicam-01_1806_20210722_212134.mp4'
     input_mag_factor = 1
 
     el = EditLabels(input_h5_path, input_video, input_mag_factor)
