@@ -1,6 +1,8 @@
 '''
 dlc2_edit_labels
 
+debugging branch :)
+
 Simple editor to create/edit bodypart lables for DeepLabCut
 
 Using the basic framework from maximus009/VideoPlayer
@@ -20,7 +22,7 @@ Interface:
     left hold drag: drag a marker
     right click: delete a marker
     r: back to the inferring coords
-    <number>: add bodypart (see number for each bodypart in the coordinate window)
+    <number>: add bodypart (see number for each bod part in the coordinate window)
     p: set p_value, which set the boundary between thick and thin cross marking
 
 <anotating freeze>
@@ -120,6 +122,8 @@ class EditLabels():
         self.freeze_sign = []
 
         self.img = []
+
+        self.column_nan = []
 
     def edit_labels(self, ):
         '''
@@ -250,6 +254,21 @@ class EditLabels():
         # Initialize display window for bodypart coordinate
         cv2.namedWindow('coords')
         cv2.moveWindow('coords', 1000, 50)
+
+        # # generate array for total number of nan value for each video frame
+        # self.column_nan = np.array(
+        #     [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
+        #      for y in range(len(self.mdf.index))])
+
+        # I think this is a better way to do it but we shall see.
+        # Above comment contains the old version of this code
+        leng = len(self.mdf.loc[1])
+        for i in range(0, len(self.mdf)):
+            temp = 0
+            for j in range(0, leng, 3):
+                if math.isnan(self.mdf.loc[i][j]):
+                    temp = temp + 1
+            self.column_nan.append(temp)
 
     def initialize_param(self):
         '''
@@ -422,6 +441,7 @@ class EditLabels():
                     [math.nan, math.nan, likelihood]
                 label_deleted = True
                 self.mdf_modified[self.current_frame] = True
+                self.column_nan[self.current_frame] = self.column_nan[self.current_frame] + 1
 
         # Draw circle or cross point as marker on video
             if not label_deleted:
@@ -671,11 +691,6 @@ class EditLabels():
 
         find = False
 
-        # generate array for total number of nan value for each video frame
-        column_nan = np.array(
-            [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
-             for y in range(len(self.mdf.index))])
-
         # current video frame position is at the end of video, do nothing
         if self.current_frame == len(self.mdf.index)-1:
             frame = self.current_frame
@@ -683,14 +698,14 @@ class EditLabels():
         else:
             # scan from current position to the end of video
             for frame in range(self.current_frame+1, len(self.mdf.index)):
-                if column_nan[frame] > 0:
+                if self.column_nan[frame] > 0:
                     print('frame '+str(frame)+' contains nan')
                     find = True
                     break
             # scan from the beginning to the current position
             if not find:
                 for frame in range(0, self.current_frame+1):
-                    if column_nan[frame] > 0:
+                    if self.column_nan[frame] > 0:
                         print('frame '+str(frame)+' contains nan')
                         # find = True
                         break
@@ -719,6 +734,7 @@ class EditLabels():
             [100.0, 100.0, 1.0]
         self.mdf_modified[self.current_frame] = True
         print('one label is added')
+        self.column_nan[self.current_frame] = self.column_nan[self.current_frame] - 1
 
     def main_loop(self):
         '''
@@ -1063,9 +1079,9 @@ class EditLabels():
 
 if __name__ == '__main__':
 
-    input_h5_path = r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5'
-    input_video = r'm154.mp4'
-    input_mag_factor = 2
+    input_h5_path = r'Z:\dalton\homecage_videos\black_mice\13_pair\analyzed_videos\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+    input_video = r'Z:\dalton\homecage_videos\black_mice\13_pair\analyzed_videos\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el_bp_labeled.mp4'
+    input_mag_factor = 1
 
     el = EditLabels(input_h5_path, input_video, input_mag_factor)
     el.edit_labels()
