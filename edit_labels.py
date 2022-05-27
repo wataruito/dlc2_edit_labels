@@ -47,14 +47,17 @@ import pandas as pd
 import cv2
 import pytz
 
+
 class EditLabels():
     '''
     EditLabels
     '''
 
-    def __init__(self, h5_path, video, mag_factor):
+    def __init__(self, process_list, h5_path, video, mag_factor):
         '''
         '''
+        # multiprocess
+        self.process_list = process_list
 
         self.h5_path = h5_path              # DeepLabCut inferring result file
         self.video = video                  # video path
@@ -739,6 +742,8 @@ class EditLabels():
         '''
         while True:
             try:
+                # store current_frame
+                current_frame_bk = self.current_frame
                 # If reach to the end, play from the begining
                 # if current_frame==tots-1:
                 if self.current_frame == self.tots:
@@ -785,7 +790,21 @@ class EditLabels():
                 # Read key input
                 status_new = self.status_list[cv2.waitKey(1)]
                 if self.key_comm(status_new):
+                    # send pressed key and the extent to each process
+                    for _process_id_key in self.process_list:
+                        self.process_list[_process_id_key][1].put('e')
                     break
+
+                # send current_frame to subwindows only when change
+                if current_frame_bk != self.current_frame:
+                    # send pressed key and the extent to each process
+                    for _process_id_key in self.process_list:
+                        self.process_list[_process_id_key][1].put(
+                            self.current_frame)
+
+                    # wait for completion of task
+                    for _process_id_key in self.process_list:
+                        self.process_list[_process_id_key][1].join()
 
             except KeyError:
                 print("Invalid Key was pressed")

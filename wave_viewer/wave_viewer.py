@@ -119,7 +119,7 @@ class WaveViewer(multiprocessing.Process):
 
         # initial viewing window
         self.t_width = 20.0     # width, video frame
-        self.t_cur = 10.0       # center, video frame
+        self.t_cur = 0.0       # center, video frame
 
         # for contour plot, like spectrogram
         self.hmin, self.hmax = 0.0, 0.0
@@ -211,6 +211,8 @@ class WaveViewer(multiprocessing.Process):
                 bp_likelihood = self.mdf.loc[self.idx[:],
                                              self.idx[self.scorer[0], self.individuals[0], self.bodyparts[bodypart], self.coords[2]]]
                 self.ax_subplot.plot(bp_likelihood)
+            self.lines = self.ax_subplot.plot(
+                [self.t_cur, self.t_cur], [0.0, 1.0], 'k--')
 
         if self.d_type == 'x_axis':
             self.ax_plot, = self.ax_subplot.plot(
@@ -224,6 +226,48 @@ class WaveViewer(multiprocessing.Process):
         self.ax_subplot.set_xlim(t_min, t_max)
 
     def timer_call_back(self):
+        '''
+        timer_call_back
+        '''
+        if not self.task_queue.empty():
+            # next_task = self.task_queue.get()
+            self.t_cur = self.task_queue.get()
+
+            if self.t_cur == 'e':
+                self.cmd_interp(self.t_cur)
+            else:
+                # self.t_cur = self.t_width/16.0
+
+                self.update_plot()
+
+            # elif event == 'up':
+            #     self.t_width = self.t_width * 2.0
+            # elif event == 'down':
+            #     self.t_width = self.t_width / 2.0
+
+            # view window cannot be bigger than max_time
+            if self.t_width > self.max_time:
+                self.t_width = self.max_time
+            # # center cannot move beyond max_time
+            # if self.t_cur + self.t_width/2.0 > self.max_time:
+            #     self.t_cur = self.max_time - self.t_width/2.0
+            # # center cannot move below 0
+            # if self.t_cur - self.t_width/2.0 < 0.0:
+            #     self.t_cur = 0.0 + self.t_width/2.0
+
+            # if event in ('right', 'left', 'up', 'down'):
+            #     self.update_plot()
+            # elif event == 'm':
+            #     self.move_window()
+            # else:
+            #     self.cmd_interp(event)
+            #     self.update_plot()
+
+            self.task_queue.task_done()
+
+        return True
+
+    def timer_call_back_org(self):
         '''
         timer_call_back
         '''
@@ -296,11 +340,25 @@ class WaveViewer(multiprocessing.Process):
             self.x_axis = not self.x_axis
         elif event == 'e':
             plt.close(self.fig)
+        elif event == 'up':
+            self.t_width = self.t_width * 2.0
+        elif event == 'down':
+            self.t_width = self.t_width / 2.0
+
+        # view window cannot be bigger than max_time
+        if self.t_width > self.max_time:
+            self.t_width = self.max_time
 
     def update_plot(self):
         '''
         update_plot
         '''
+
+        self.lines.pop(0).remove()
+
+        self.lines = self.ax_subplot.plot(
+            [self.t_cur, self.t_cur], [0.0, 1.0], 'k--')
+
         # compute extent
         t_min = self.t_cur - self.t_width/2
         t_max = self.t_cur + self.t_width/2
