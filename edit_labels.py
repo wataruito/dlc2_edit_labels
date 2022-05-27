@@ -22,7 +22,7 @@ Interface:
     left hold drag: drag a marker
     right click: delete a marker
     r: back to the inferring coords
-    <number>: add bodypart (see number for each bodypart in the coordinate window)
+    <number>: add bodypart (see number for each bod part in the coordinate window)
     p: set p_value, which set the boundary between thick and thin cross marking
 
 <anotating freeze>
@@ -122,6 +122,8 @@ class EditLabels():
         self.freeze_sign = []
 
         self.img = []
+
+        self.column_nan = []
 
     def edit_labels(self, ):
         '''
@@ -253,10 +255,20 @@ class EditLabels():
         cv2.namedWindow('coords')
         cv2.moveWindow('coords', 1000, 50)
 
-        # generate array for total number of nan value for each video frame
-        self.column_nan = np.array(
-            [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
-             for y in range(len(self.mdf.index))])
+        # # generate array for total number of nan value for each video frame
+        # self.column_nan = np.array(
+        #     [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
+        #      for y in range(len(self.mdf.index))])
+
+        # I think this is a better way to do it but we shall see.
+        # Above comment contains the old version of this code
+        leng = len(self.mdf.loc[1])
+        for i in range(0, len(self.mdf)):
+            temp = 0
+            for j in range(0, leng, 3):
+                if math.isnan(self.mdf.loc[i][j]):
+                    temp = temp + 1
+            self.column_nan.append(temp)
 
     def initialize_param(self):
         '''
@@ -429,6 +441,7 @@ class EditLabels():
                     [math.nan, math.nan, likelihood]
                 label_deleted = True
                 self.mdf_modified[self.current_frame] = True
+                self.column_nan[self.current_frame] = self.column_nan[self.current_frame] + 1
 
         # Draw circle or cross point as marker on video
             if not label_deleted:
@@ -721,6 +734,7 @@ class EditLabels():
             [100.0, 100.0, 1.0]
         self.mdf_modified[self.current_frame] = True
         print('one label is added')
+        self.column_nan[self.current_frame] = self.column_nan[self.current_frame] - 1
 
     def main_loop(self):
         '''
@@ -1065,9 +1079,9 @@ class EditLabels():
 
 if __name__ == '__main__':
 
-    input_h5_path = r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5'
-    input_video = r'm154.mp4'
-    input_mag_factor = 2
+    input_h5_path = r'Z:\dalton\homecage_videos\black_mice\13_pair\analyzed_videos\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+    input_video = r'Z:\dalton\homecage_videos\black_mice\13_pair\analyzed_videos\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el_bp_labeled.mp4'
+    input_mag_factor = 1
 
     el = EditLabels(input_h5_path, input_video, input_mag_factor)
     el.edit_labels()
