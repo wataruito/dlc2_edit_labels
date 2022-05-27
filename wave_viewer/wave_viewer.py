@@ -30,32 +30,26 @@ import pandas as pd
 
 class WaveViewerMaster():
     '''
-    WaveViewer
-        Master window
+    WaveViewerMaster
+        Simple example for a master window to command subprocess windows.
     '''
 
-    def __init__(self, process_list, win_geom, max_time):
+    def __init__(self, process_list, win_geom):
         '''
+        __init__
         '''
         self.process_list = process_list
-        self.fig = []
-        self.mngr = []
-
         self.win_geom = win_geom
-
-        # Define the time window displayed as graph
-        self.t_width = 10.0
-        self.t_cur = 10.0
-        self.max_time = max_time
 
     def run(self):
         '''
-        wave_viewer()
+        run
         '''
         # create window
-        mpl.rcParams['toolbar'] = 'None'    # need to put here to hide toolbar
+        mpl.rcParams['toolbar'] = 'None'    # need to put this to hide toolbar
         self.fig = plt.figure()
-        self.fig.canvas.mpl_connect('key_press_event', self.press)
+        # set callback for key_press_event as self.press function
+        self.fig.canvas.mpl_connect('key_press_event', self.key_press)
         self.fig.canvas.toolbar_visible = False
         self.fig.canvas.header_visible = False
         self.fig.canvas.footer_visible = False
@@ -67,9 +61,9 @@ class WaveViewerMaster():
 
         plt.show()
 
-    def press(self, event):
+    def key_press(self, event):
         '''
-        press
+        key_press
         '''
         # print('press', event.key)
         sys.stdout.flush()
@@ -77,45 +71,12 @@ class WaveViewerMaster():
         if hasattr(event, 'key'):
             event = event.key
 
-        shift = self.t_width/16.0
-
-        if event == 'right':
-            self.t_cur = self.t_cur + shift
-        elif event == 'left':
-            self.t_cur = self.t_cur - shift
-        elif event == 'up':
-            self.t_width = self.t_width * 2.0
-        elif event == 'down':
-            self.t_width = self.t_width / 2.0
-
-        elif event == 'e':
+        if event == 'e':
             plt.close(self.fig)
-
-        # view window cannot be bigger than max_time
-        if self.t_width > self.max_time:
-            self.t_width = self.max_time
-        # center cannot move beyond max_time
-        if self.t_cur + self.t_width/2.0 > self.max_time:
-            self.t_cur = self.max_time - self.t_width/2.0
-        # center cannot move below 0
-        if self.t_cur - self.t_width/2.0 < 0.0:
-            self.t_cur = 0.0 + self.t_width/2.0
-
-        # get position of master window from move all windows
-        geom = self.mngr.window.geometry()
-        orig_x, orig_y, _, _ = geom.getRect()
-        orig_y = orig_y - 20
 
         # send pressed key and the extent to each process
         for _process_id_key in self.process_list:
             self.process_list[_process_id_key][1].put(event)
-            if event in ('right', 'left', 'up', 'down'):
-                self.process_list[_process_id_key][1].put(self.t_cur)
-                self.process_list[_process_id_key][1].put(self.t_width)
-            if event == 'm':
-                orig_y = orig_y + 100
-                self.process_list[_process_id_key][1].put(orig_x)
-                self.process_list[_process_id_key][1].put(orig_y)
 
         # wait for completion of task
         for _process_id_key in self.process_list:
@@ -125,52 +86,56 @@ class WaveViewerMaster():
 class WaveViewer(multiprocessing.Process):
     '''
     WaveViewer
-        Subordinate window
+        Subordinate windows
     '''
 
     def __init__(self, task_queue, result_queue, h5_path, d_type, win_geom):
         '''
+        __init__
         '''
+        # for multiprocessing
         multiprocessing.Process.__init__(self)
 
         self.task_queue = task_queue
         self.result_queue = result_queue
 
+        # data to show as grap
+        self.h5_path = h5_path
         self.d_type = d_type
 
-        # viewing window
-        self.t_width = 20.0     # width, video frame
-        self.t_cur = 10.0       # center, video frame
+        # pandas index
+        self.idx = pd.IndexSlice
 
-        self.hmin, self.hmax = 0.0, 0.0
-        self.color_fac = 1.0
-
-        self.wave_data = []
-        self.timestamps = []
-        self.spec_freq = []
-
+        # matplotlib
         self.fig = []
         self.ax_subplot = []
         self.ax_plot = []
         self.mngr = []
 
-        self.x_axis = False
-
+        # windows setting
+        self.x_axis = False     # toggle x-axis
         self.win_geom = win_geom
         self.orig_x, self.orig_y = win_geom[0], win_geom[1]
 
-        self.h5_path = h5_path
-        self.idx = pd.IndexSlice
+        # initial viewing window
+        self.t_width = 20.0     # width, video frame
+        self.t_cur = 10.0       # center, video frame
+
+        # for contour plot, like spectrogram
+        self.hmin, self.hmax = 0.0, 0.0
+        self.color_fac = 1.0
+        self.wave_data = []
+        self.timestamps = []
+        self.spec_freq = []
 
     def run(self):
         '''
-        wave_viewer()
+        run
         '''
-
         ###################################
         # Read DeepLabCut h5 file
         self.mdf = pd.read_hdf(self.h5_path)
-        self.mdf_org = self.mdf.copy()    # Keep original
+        # self.mdf_org = self.mdf.copy()    # Keep original
         # Extract data from specific levels
         #   You can access each label by self.individuals[]
         self.scorer = self.mdf.columns.unique(level='scorer').to_numpy()
@@ -179,6 +144,7 @@ class WaveViewer(multiprocessing.Process):
         self.bodyparts = self.mdf.columns.unique(level='bodyparts').to_numpy()
         self.coords = self.mdf.columns.unique(level='coords').to_numpy()
         # self.mdf_modified = np.array([False for x in range(self.tots)])
+        self.max_time = len(self.mdf)
 
         ###################################
         # Create matplotlib windows
@@ -205,6 +171,7 @@ class WaveViewer(multiprocessing.Process):
         # create window
         mpl.rcParams['toolbar'] = 'None'    # need to put here to hide toolbar
         self.fig = plt.figure()
+        # key input in the local window
         self.fig.canvas.mpl_connect(
             'key_press_event', self.local_key_call_back)
         self.fig.canvas.toolbar_visible = False
@@ -234,7 +201,6 @@ class WaveViewer(multiprocessing.Process):
         '''
         disp_1d
         '''
-
         # # compute view window size
         t_min = self.t_cur - self.t_width/2
         t_max = self.t_cur + self.t_width/2
@@ -242,9 +208,9 @@ class WaveViewer(multiprocessing.Process):
         # plot wave or x_axis
         if self.d_type == 'wave':
             for bodypart in range(len(self.bodyparts)):
-                snout_lh = self.mdf.loc[self.idx[:],
-                                        self.idx['DLC_resnet50_test01Dec21shuffle1_100000', 'sub1', self.bodyparts[bodypart], 'likelihood']]
-                self.ax_subplot.plot(snout_lh)
+                bp_likelihood = self.mdf.loc[self.idx[:],
+                                             self.idx[self.scorer[0], self.individuals[0], self.bodyparts[bodypart], self.coords[2]]]
+                self.ax_subplot.plot(bp_likelihood)
 
         if self.d_type == 'x_axis':
             self.ax_plot, = self.ax_subplot.plot(
@@ -259,24 +225,39 @@ class WaveViewer(multiprocessing.Process):
 
     def timer_call_back(self):
         '''
-        call_back()
+        timer_call_back
         '''
         if not self.task_queue.empty():
-            next_task = self.task_queue.get()
-            if next_task in ('right', 'left', 'up', 'down'):
-                self.t_cur = self.task_queue.get()
-                self.task_queue.task_done()
-                self.t_width = self.task_queue.get()
-                self.task_queue.task_done()
+            # next_task = self.task_queue.get()
+            event = self.task_queue.get()
+
+            shift = self.t_width/16.0
+
+            if event == 'right':
+                self.t_cur = self.t_cur + shift
+            elif event == 'left':
+                self.t_cur = self.t_cur - shift
+            elif event == 'up':
+                self.t_width = self.t_width * 2.0
+            elif event == 'down':
+                self.t_width = self.t_width / 2.0
+
+            # view window cannot be bigger than max_time
+            if self.t_width > self.max_time:
+                self.t_width = self.max_time
+            # center cannot move beyond max_time
+            if self.t_cur + self.t_width/2.0 > self.max_time:
+                self.t_cur = self.max_time - self.t_width/2.0
+            # center cannot move below 0
+            if self.t_cur - self.t_width/2.0 < 0.0:
+                self.t_cur = 0.0 + self.t_width/2.0
+
+            if event in ('right', 'left', 'up', 'down'):
                 self.update_plot()
-            elif next_task == 'm':
-                self.orig_x = self.task_queue.get()
-                self.task_queue.task_done()
-                self.orig_y = self.task_queue.get()
-                self.task_queue.task_done()
+            elif event == 'm':
                 self.move_window()
             else:
-                self.cmd_interp(next_task)
+                self.cmd_interp(event)
                 self.update_plot()
 
             self.task_queue.task_done()
@@ -304,7 +285,8 @@ class WaveViewer(multiprocessing.Process):
 
     def cmd_interp(self, event):
         '''
-        press
+        cmd_interp
+            local command list
         '''
         if event == 'h':  # hotter
             self.hmax = self.hmax / self.color_fac
@@ -322,8 +304,6 @@ class WaveViewer(multiprocessing.Process):
         # compute extent
         t_min = self.t_cur - self.t_width/2
         t_max = self.t_cur + self.t_width/2
-        #_, xmin = self.find_nearest(self.timestamps, t_min)
-        #_, xmax = self.find_nearest(self.timestamps, t_max)
 
         if self.d_type in ('spec', 'paca', 'pacp'):
             # extent = [t_min, t_max, 0, 200]
@@ -336,9 +316,6 @@ class WaveViewer(multiprocessing.Process):
             self.ax_subplot.set_xlim(t_min, t_max)
 
         else:
-            # self.ax_plot.set_data(
-            #     self.timestamps[xmin:xmax], self.wave_data[xmin:xmax])
-            # self.ax_subplot.relim()
             self.ax_subplot.set_xlim(t_min, t_max)
             # self.ax_subplot.autoscale_view(True, True, True)
 
@@ -369,9 +346,10 @@ def spawn_wins(process_members, window_spec):
     '''
     spawn_wins
     '''
+    # decode window size/position setting
     win_x_len = window_spec['win_x_len']
     win_y_len = window_spec['win_y_len']
-    win_y_len_axis = window_spec['win_y_len_axis']
+    win_y_len_axis = window_spec['win_y_len_axis']  # only for x-axis window
     win_x_origin = window_spec['win_x_origin']
     win_y_origin = window_spec['win_y_origin']
 
@@ -417,9 +395,7 @@ if __name__ == '__main__':
     input_process_list = spawn_wins(input_files, window_geo)
 
     # open master window for control
-    _total_video_frame = 720.0    # total video frame number
-    masterWin = WaveViewerMaster(
-        input_process_list, (0, 20, 1000, 80), _total_video_frame)
+    masterWin = WaveViewerMaster(input_process_list, (0, 20, 1000, 80))
     masterWin.run()
 
     # wait until all processes stop
