@@ -47,7 +47,6 @@ import pandas as pd
 import cv2
 import pytz
 
-
 class EditLabels():
     '''
     EditLabels
@@ -195,8 +194,7 @@ class EditLabels():
         elif event == cv2.EVENT_LBUTTONUP:
             self.drag = False
         elif event == cv2.EVENT_MOUSEMOVE:
-            if self.drag:
-                self.cur_x, self.cur_y = read_x, read_y
+            self.cur_x, self.cur_y = read_x, read_y
         elif event == cv2.EVENT_RBUTTONDOWN:
             self.cur_x, self.cur_y = read_x, read_y
             self.rclick = True
@@ -728,10 +726,9 @@ class EditLabels():
         '''
         add_label
         '''
-
         # Store the mouse pointer position into table
         self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
-            [100.0, 100.0, 1.0]
+            [self.cur_x, self.cur_y, 1.0]
         self.mdf_modified[self.current_frame] = True
         print('one label is added')
         self.column_nan[self.current_frame] = self.column_nan[self.current_frame] - 1
