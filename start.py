@@ -17,9 +17,8 @@ if __name__ == '__main__':
                   'win_x_origin': 0, 'win_y_origin': 0}
 
     # set input file for each window
-    input_files = [
-        [input_h5_path,     'wave']
-    ]
+    #input_files = [[input_h5_path,     'wave']]
+    input_files = [[input_h5_path,     'raster']]
 
     # start each window
     input_process_list = wv.spawn_wins(input_files, window_geo)

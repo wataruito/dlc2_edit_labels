@@ -263,13 +263,16 @@ class EditLabels():
 
         # I think this is a better way to do it but we shall see.
         # Above comment contains the old version of this code
-        leng = len(self.mdf.loc[1])
-        for i in range(0, len(self.mdf)):
-            temp = 0
-            for j in range(0, leng, 3):
-                if math.isnan(self.mdf.loc[i][j]):
-                    temp = temp + 1
-            self.column_nan.append(temp)
+        # leng = len(self.mdf.loc[1])
+        # for i in range(0, len(self.mdf)):
+        #     temp = 0
+        #     for j in range(0, leng, 3):
+        #         if math.isnan(self.mdf.loc[i][j]):
+        #             temp = temp + 1
+        #     self.column_nan.append(temp)
+
+        # Speed improvement (wi:2022/05/30)
+        self.column_nan = self.mdf.isnull().sum(axis=1).to_numpy()
 
     def initialize_param(self):
         '''

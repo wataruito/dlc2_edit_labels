@@ -154,6 +154,9 @@ class WaveViewer(multiprocessing.Process):
         self.t_width = 20.0     # width, video frame
         self.t_cur = 0.0       # center, video frame
 
+        # current line
+        self.cur_line = {'wave': [0.0, 1.0], 'raster': [-0.5, 7.5]}
+
         # for contour plot, like spectrogram
         self.hmin, self.hmax = 0.0, 0.0
         self.color_fac = 1.0
@@ -171,7 +174,7 @@ class WaveViewer(multiprocessing.Process):
         # self.mdf_org = self.mdf.copy()    # Keep original
         # Extract data from specific levels
         #   You can access each label by self.individuals[]
-        self.scorer = self.mdf.columns.unique(level='scorer').to_numpy()
+        self.scorers = self.mdf.columns.unique(level='scorer').to_numpy()
         self.individuals = self.mdf.columns.unique(
             level='individuals').to_numpy()
         self.bodyparts = self.mdf.columns.unique(level='bodyparts').to_numpy()
@@ -245,14 +248,44 @@ class WaveViewer(multiprocessing.Process):
 
                 for bodypart in range(len(self.bodyparts)):
                     bp_likelihood = self.mdf.loc[self.idx[:],
-                                                 self.idx[self.scorer[0], self.individuals[individual],
+                                                 self.idx[self.scorers[0], self.individuals[individual],
                                                           self.bodyparts[bodypart], self.coords[2]]]
                     bp_likelihood = np.nan_to_num(bp_likelihood, nan=0.0)
 
                     self.ax_subplot.plot(bp_likelihood, colors[individual])
 
             self.lines = self.ax_subplot.plot(
-                [self.t_cur, self.t_cur], [0.0, 1.0], 'k--')
+                [self.t_cur, self.t_cur], self.cur_line[self.d_type], 'k--')
+
+        if self.d_type == 'raster':
+            # compute index arrays the likelihood is below the threshold
+            lh_threshold = 0.1
+            _events = {}
+            for scorer in self.scorers:
+                for individual in self.individuals:
+                    for bodypart in self.bodyparts:
+                        _a = self.mdf[(scorer, individual, bodypart,
+                                       self.coords[2])].isnull().to_numpy()
+                        _b = (self.mdf[(scorer, individual, bodypart,
+                              self.coords[2])] < lh_threshold).to_numpy()
+                        _events[individual +
+                                bodypart] = self.mdf[np.logical_or(_a, _b)].index.to_numpy()
+            events = list(_events.values())
+
+            print('## The ratio of Nan to the entire video frames. (total: ',
+                  self.max_time, ' frames)')
+            for individual in self.individuals:
+                for bodypart in self.bodyparts:
+                    print('{0}: {1:8.2f}'.format(individual + bodypart,
+                          len(_events[individual + bodypart]) / self.max_time))
+
+            colors = np.array(['g', 'g', 'g', 'g', 'r', 'r', 'r', 'r'])
+
+            self.ax_subplot.eventplot(
+                np.flip(events, 0), linelengths=0.8, colors=np.flip(colors))
+
+            self.lines = self.ax_subplot.plot(
+                [self.t_cur, self.t_cur], [-0.5, 7.5], 'k--')
 
         if self.d_type == 'x_axis':
             self.ax_plot, = self.ax_subplot.plot(
@@ -397,7 +430,7 @@ class WaveViewer(multiprocessing.Process):
         self.lines.pop(0).remove()
 
         self.lines = self.ax_subplot.plot(
-            [self.t_cur, self.t_cur], [0.0, 1.0], 'k--')
+            [self.t_cur, self.t_cur], self.cur_line[self.d_type], 'k--')
 
         # compute extent
         t_min = self.t_cur - self.t_width/2
@@ -487,9 +520,8 @@ if __name__ == '__main__':
     h5_path = r'rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
 
     # set input file for each window
-    input_files = [
-        [h5_path,     'wave']
-    ]
+    input_files = [[h5_path,     'wave']]
+    input_files = [[h5_path,     'raster']]
 
     # start each window
     input_process_list = spawn_wins(input_files, window_geo)
