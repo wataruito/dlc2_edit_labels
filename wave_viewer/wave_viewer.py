@@ -34,17 +34,36 @@ class WaveViewerMaster():
         Simple example for a master window to command subprocess windows.
     '''
 
-    def __init__(self, process_list, win_geom):
+    def __init__(self, process_list, win_geom, h5_path):
         '''
         __init__
         '''
         self.process_list = process_list
         self.win_geom = win_geom
 
+        self.h5_path = h5_path
+
+        self.t_cur = 0.0       # current video frame
+
     def run(self):
         '''
         run
         '''
+
+        ###################################
+        # Read DeepLabCut h5 file
+        self.mdf = pd.read_hdf(self.h5_path)
+        # self.mdf_org = self.mdf.copy()    # Keep original
+        # Extract data from specific levels
+        #   You can access each label by self.individuals[]
+        # self.scorer = self.mdf.columns.unique(level='scorer').to_numpy()
+        # self.individuals = self.mdf.columns.unique(
+        #     level='individuals').to_numpy()
+        # self.bodyparts = self.mdf.columns.unique(level='bodyparts').to_numpy()
+        # self.coords = self.mdf.columns.unique(level='coords').to_numpy()
+        # # self.mdf_modified = np.array([False for x in range(self.tots)])
+        self.max_time = len(self.mdf)
+
         # create window
         mpl.rcParams['toolbar'] = 'None'    # need to put this to hide toolbar
         self.fig = plt.figure()
@@ -71,12 +90,26 @@ class WaveViewerMaster():
         if hasattr(event, 'key'):
             event = event.key
 
+        if event == 'd':
+            self.t_cur += 1
+            if self.t_cur == self.max_time:
+                self.t_cur = 0
+        if event == 'a':
+            self.t_cur -= 1
+            if self.t_cur < 0:
+                self.t_cur = self.max_time
+
         if event == 'e':
             plt.close(self.fig)
 
-        # send pressed key and the extent to each process
-        for _process_id_key in self.process_list:
-            self.process_list[_process_id_key][1].put(event)
+        if event in ['d', 'a']:
+            # send pressed key and the extent to each process
+            for _process_id_key in self.process_list:
+                self.process_list[_process_id_key][1].put(self.t_cur)
+        else:
+            # send pressed key and the extent to each process
+            for _process_id_key in self.process_list:
+                self.process_list[_process_id_key][1].put(event)
 
         # wait for completion of task
         for _process_id_key in self.process_list:
@@ -206,11 +239,18 @@ class WaveViewer(multiprocessing.Process):
         t_max = self.t_cur + self.t_width/2
 
         # plot wave or x_axis
+        colors = ['g', 'r']
         if self.d_type == 'wave':
-            for bodypart in range(len(self.bodyparts)):
-                bp_likelihood = self.mdf.loc[self.idx[:],
-                                             self.idx[self.scorer[0], self.individuals[0], self.bodyparts[bodypart], self.coords[2]]]
-                self.ax_subplot.plot(bp_likelihood)
+            for individual in range(len(self.individuals)):
+
+                for bodypart in range(len(self.bodyparts)):
+                    bp_likelihood = self.mdf.loc[self.idx[:],
+                                                 self.idx[self.scorer[0], self.individuals[individual],
+                                                          self.bodyparts[bodypart], self.coords[2]]]
+                    bp_likelihood = np.nan_to_num(bp_likelihood, nan=0.0)
+
+                    self.ax_subplot.plot(bp_likelihood, colors[individual])
+
             self.lines = self.ax_subplot.plot(
                 [self.t_cur, self.t_cur], [0.0, 1.0], 'k--')
 
@@ -444,16 +484,19 @@ if __name__ == '__main__':
     window_geo = {'win_x_len': 1000, 'win_y_len': 100, 'win_y_len_axis': 30,
                   'win_x_origin': 0, 'win_y_origin': 0}
 
+    h5_path = r'rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+
     # set input file for each window
     input_files = [
-        [r'm154DLC_resnet50_test01Dec21shuffle1_100000.h5',     'wave']
+        [h5_path,     'wave']
     ]
 
     # start each window
     input_process_list = spawn_wins(input_files, window_geo)
 
     # open master window for control
-    masterWin = WaveViewerMaster(input_process_list, (0, 20, 1000, 80))
+    masterWin = WaveViewerMaster(
+        input_process_list, (0, 20, 1000, 80), h5_path)
     masterWin.run()
 
     # wait until all processes stop

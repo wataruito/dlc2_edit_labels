@@ -53,7 +53,7 @@ class EditLabels():
     EditLabels
     '''
 
-    def __init__(self, process_list, h5_path, video, mag_factor):
+    def __init__(self, h5_path, video, mag_factor, process_list=''):
         '''
         '''
         # multiprocess
@@ -528,7 +528,7 @@ class EditLabels():
         '''
         # display coordinates on coordinate panel
         # Create new blank image
-        width, height = 400, 180
+        width, height = 600, 180
         # white = (255, 255, 255)
         black = (0, 0, 0)
         coords_blank = self.create_blank(width, height, rgb_color=black)
@@ -789,22 +789,28 @@ class EditLabels():
                 # keyborad command
                 # Read key input
                 status_new = self.status_list[cv2.waitKey(1)]
+
+                # Quit app procedure
                 if self.key_comm(status_new):
-                    # send pressed key and the extent to each process
-                    for _process_id_key in self.process_list:
-                        self.process_list[_process_id_key][1].put('e')
+
+                    if self.process_list != '':
+                        # send pressed key and the extent to each process
+                        for _process_id_key in self.process_list:
+                            self.process_list[_process_id_key][1].put('e')
                     break
+                # Regular loop
+                else:
+                    if self.process_list != '':
+                        # send current_frame to subwindows only when change
+                        if current_frame_bk != self.current_frame:
+                            # send pressed key and the extent to each process
+                            for _process_id_key in self.process_list:
+                                self.process_list[_process_id_key][1].put(
+                                    self.current_frame)
 
-                # send current_frame to subwindows only when change
-                if current_frame_bk != self.current_frame:
-                    # send pressed key and the extent to each process
-                    for _process_id_key in self.process_list:
-                        self.process_list[_process_id_key][1].put(
-                            self.current_frame)
-
-                    # wait for completion of task
-                    for _process_id_key in self.process_list:
-                        self.process_list[_process_id_key][1].join()
+                            # wait for completion of task
+                            for _process_id_key in self.process_list:
+                                self.process_list[_process_id_key][1].join()
 
             except KeyError:
                 print("Invalid Key was pressed")
