@@ -3,14 +3,14 @@ dlc2_edit_labels
 
 debugging branch :)
 
-Simple editor to create/edit bodypart lables for DeepLabCut
+Simple editor to create/edit body part labels for DeepLabCut
 
 Using the basic framework from maximus009/VideoPlayer
     https://github.com/maximus009/VideoPlayer
 
 Interface:
 <Video control>
-    w: start palying
+    w: start playing
     s: stop playing
     a: step back a frame
     d: step forward a frame
@@ -18,14 +18,18 @@ Interface:
     e: play slower
     <space>: go to next frame containing nan value
 
+    <: go to previous labeled frame
+    >: go to next labeled frame
+    m: show all labeled coords
+
 <marker manipulation>
     left hold drag: drag a marker
     right click: delete a marker
     r: back to the inferring coords
-    <number>: add bodypart (see number for each bod part in the coordinate window)
-    p: set p_value, which set the boundary between thick and thin cross marking
+    <number>: add body part (see number for each bod part in the coordinate window)
+    p: set threshold p_value, which set the boundary between thick and thin cross marking
 
-<anotating freeze>
+<annotating freeze>
     !: target sub1
     @: target sub2
     j: freezing start, freeze_flag on (first video frame for freeze)
@@ -127,6 +131,8 @@ class EditLabels():
         self.img = []
 
         self.column_nan = []
+
+        self.show_labels = False
 
     def edit_labels(self, ):
         '''
@@ -329,6 +335,12 @@ class EditLabels():
                             ord('u'): 'erase_freezing',
                             ord('p'): 'p_value',
                             ord('r'): 'reset_to_original',
+
+                            ord('m'): 'show_labels',
+
+                            ord('>'): 'jump_next_label',
+                            ord('<'): 'jump_pre_label',
+
                             -1: 'no_key_press',
                             27: 'exit'}
 
@@ -465,6 +477,10 @@ class EditLabels():
         print('Reconstructed total rows are :', len(
             self.df_train) + len(self.df_train_diff) + len(self.df_test))
 
+        # Create array of all labeled coord
+        self.labeled_data = np.column_stack((self.df_train.loc[self.idx[:], self.idx[:, :, :, ('x')]].to_numpy().flatten(),
+                                             self.df_train.loc[self.idx[:], self.idx[:, :, :, ('y')]].to_numpy().flatten()))
+
     def disp_marker(self, i_sco, i_ind, i_bod):
         '''
         disp_marker
@@ -569,7 +585,6 @@ class EditLabels():
                     cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
                              (dis_x-self.length, dis_y+self.length), color, thickness)
 
-# disp_stable_marker
     def disp_stable_marker(self, i_sco, i_ind, i_bod):
         '''
         disp_stable_marker
@@ -605,6 +620,33 @@ class EditLabels():
                     color = (0, 255, 255)
                 elif i_ind == 'sub2':
                     color = (0, 255, 255)
+
+                cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                           thickness=1, lineType=8, shift=0)
+
+    def disp_all_labels(self):
+        # def disp_stable_marker2(self, _df, i_sco, i_ind, i_bod, i_df):
+        '''
+        disp_all_labels()
+            display all labeled coords
+        '''
+        for i in range(len(self.labeled_data)):
+
+            [tab_x, tab_y] = self.labeled_data[i]
+
+            # if value is not empty, display the bodypart marker
+            if not (math.isnan(tab_x) or math.isnan(tab_y)):
+                stored_x = int(tab_x)*self.mag_factor
+                stored_y = int(tab_y)*self.mag_factor
+                label_deleted = False
+
+                # Display cross at the store position
+                [dis_x, dis_y] = [stored_x, stored_y]
+
+            # Draw circle as marker on video
+                # if not label_deleted:
+                # differential color for each animal
+                color = (0, 255, 255)
 
                 cv2.circle(self.img, (dis_x, dis_y), 10, color,
                            thickness=1, lineType=8, shift=0)
@@ -746,6 +788,15 @@ class EditLabels():
             cv2.setTrackbarPos('S', 'image', self.current_frame)
             self.status = 'stop'
 
+        # show all labeled coords
+        elif self.status == 'show_labels':
+            # toggle the self.show_labels
+            if self.show_labels:
+                self.show_labels = False
+            else:
+                self.show_labels = True
+            self.status = status_pre
+
         # slow down playing speed
         elif self.status == 'slow':
             self.frame_rate = max(self.frame_rate - 1, 0)
@@ -762,13 +813,13 @@ class EditLabels():
         #     self.mode = 'drag_mode'
         #     status = status_pre
 
-        # target for anotating freeze to sub1
+        # target for annotating freeze to sub1
         elif self.status == 'target_sub1':
             self.freeze_sub = 0
             self.freeze_sub_change = True
             self.status = status_pre
 
-        # target for anotating freeze to sub2
+        # target for annotating freeze to sub2
         elif self.status == 'target_sub2':
             self.freeze_sub = 1
             self.freeze_sub_change = True
@@ -798,10 +849,22 @@ class EditLabels():
             self.current_frame = self.jump_nan()
             cv2.setTrackbarPos('S', 'image', self.current_frame)
 
+        # go to the next labeled frame
+        elif self.status == 'jump_next_label':
+            self.status = 'stop'
+            self.current_frame = self.jump_next_label()
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+
+        # go to the previous labeled frame
+        elif self.status == 'jump_pre_label':
+            self.status = 'stop'
+            self.current_frame = self.jump_pre_label()
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+
         # set the p_value to change thickness of cross marker
         elif self.status == 'p_value':
             self.status = 'stop'
-            print("Please input p_value threshould: ", end='')
+            print("Please input p_value threshold: ", end='')
             self.p_value = float(input())
 
         # snap the current frame to file
@@ -816,7 +879,7 @@ class EditLabels():
             self.add_label(self.scorer[0], self.status[1], self.status[2])
             self.status = 'stop'
 
-        # go back to original coordiante for a bodypart marker which is moved
+        # go back to original coordinate for a bodypart marker which is moved
         elif self.status == 'reset_to_original':
             self.reset_to_original()
             self.status = 'stop'
@@ -854,6 +917,42 @@ class EditLabels():
                         break
         return frame
 
+    def jump_next_label(self):
+        '''
+        jump_next_label
+        '''
+        find = False
+
+        for frame in range(self.current_frame+1, len(self.mdf)):
+            if frame in self.df_train.index:
+                find = True
+                return frame
+
+        if not find:
+            for frame in range(0, self.current_frame):
+                if frame in self.df_train.index:
+                    return frame
+
+        return self.current_frame
+
+    def jump_pre_label(self):
+        '''
+        jump_pre_label
+        '''
+        find = False
+
+        for frame in range(self.current_frame-1, 0, -1):
+            if frame in self.df_train.index:
+                find = True
+                return frame
+
+        if not find:
+            for frame in range(len(self.mdf), self.current_frame, -1):
+                if frame in self.df_train.index:
+                    return frame
+
+        return self.current_frame
+
     def reset_to_original(self):
         '''
         reset_to_original
@@ -878,7 +977,6 @@ class EditLabels():
         print('one label is added')
         self.column_nan[self.current_frame] = self.column_nan[self.current_frame] - 1
 
-# main_loop
     def main_loop(self):
         '''
         Main loop
@@ -912,6 +1010,10 @@ class EditLabels():
                 self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
                 self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
 
+                # display all labeled coords
+                if self.show_labels:
+                    self.disp_all_labels()
+
                 # Display markers for each bodyparts
                 # Loop for all bodyparts
                 #   scorer -> individuals -> bodyparts
@@ -934,7 +1036,7 @@ class EditLabels():
                 # display coordinates and p_value on coordinate panel
                 self.coordinate_panel()
 
-                # keyborad command
+                # keyboard command
                 # Read key input
                 status_new = self.status_list[cv2.waitKey(1)]
 
