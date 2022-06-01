@@ -46,6 +46,7 @@ import numpy as np
 import pandas as pd
 import cv2
 import pytz
+import re
 
 
 class EditLabels():
@@ -308,6 +309,14 @@ class EditLabels():
         self.mdf_modified = np.array([False for x in range(self.tots)])
 
         ###################################
+        # Generate dataframes for train, train_diff, and test
+        #   to show markers for labeled training dataset
+        labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
+        train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
+        self.read_labeled_data(
+            labeled_h5_path=labeled_h5_path, train_pickle_path=train_pickle_path)
+
+        ###################################
         # keyboard commands
         self.status_list = {ord('s'): 'stop',
                             ord('w'): 'play',
@@ -366,6 +375,96 @@ class EditLabels():
             self.freeze = np.array([[False for x in range(2)]
                                     for y in range(self.tots)])
 
+    def prep_df(self, _df_org, image_names):
+        '''
+        # Extract labeled data by image_names list and
+        # reset the index to the frame number same as in the inferred dataframe
+        '''
+
+        idx = pd.IndexSlice
+
+        # extract
+        _df = _df_org.loc[idx[:, :, image_names], :]
+        _df = _df.reset_index()
+
+        # generate the frame number for column ''.
+        _df[''] = [int(re.search('img(.+?).png', text).group(1))
+                   for text in _df['level_2'].to_numpy()]
+
+        # set index on the created frame number
+        _df = _df.set_index('', drop=True)
+        _df = _df.drop(['level_0', 'level_1', 'level_2'], axis=1, level=0)
+
+        return _df
+
+    def read_labeled_data(self, labeled_h5_path='', train_pickle_path=''):
+
+        #################################
+        # Identify video frame IDs used for training and testing
+
+        #################################
+        # Read files
+        # read the pickle file for training
+        # pickle_path = 'training-datasets/homecage_test01_DJ95shuffle1.pickle'
+        # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
+        _df_train_dataset = pd.read_pickle(train_pickle_path)
+
+        # read the h5 file for the labeled frames
+        # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
+        _df_labeled_dataset = pd.read_hdf(labeled_h5_path)
+
+        #################################
+        # Extract lists of image_names for train, train2, and test
+
+        # train_image_names
+        #   dataframe of labeled coords for each video frame used for training
+        _df_train_coords = _df_train_dataset[0]
+        #   extract image names to an array
+        train_image_names = [_df_train_coords[x]['image'][2]
+                             for x in range(len(_df_train_coords))]
+        train_image_names.sort()
+        # print(train_image_names)
+
+        # train2_image_names/train_image_names_diff
+        #   list of video frame IDs for training (It has additional 2 frames)
+        _df_train2_ids = _df_train_dataset[1]
+        _df_train2_ids.sort()
+        train2_image_names = list(
+            _df_labeled_dataset.iloc[_df_train2_ids].reset_index()['level_2'].to_numpy())
+        #   check the difference between train_image_names and train2_image_names
+        #   Get difference between two lists
+        #   https://stackoverflow.com/questions/3462143/get-difference-between-two-lists
+        train_image_names_diff = list(
+            (set(train2_image_names).difference(set(train_image_names))))
+
+        # test_image_names
+        #   list of video frame IDs for testing
+        _df_test_ids = _df_train_dataset[2]
+        _df_test_ids.sort()
+        test_image_names = list(_df_labeled_dataset.iloc[_df_test_ids].reset_index()[
+                                'level_2'].to_numpy())
+
+        #################################
+        # Extract the datasets for train, train_diff and test from the labeled dataset
+
+        self.df_train = self.prep_df(_df_labeled_dataset, train_image_names)
+        self.df_train_diff = self.prep_df(
+            _df_labeled_dataset, train_image_names_diff)
+        self.df_test = self.prep_df(_df_labeled_dataset, test_image_names)
+
+        # Extract data from specific levels
+        self.labeled_scorer = self.df_train.columns.unique(
+            level='scorer').to_numpy()
+        self.labeled_individuals = self.df_train.columns.unique(
+            level='individuals').to_numpy()
+        self.labeled_bodyparts = self.df_train.columns.unique(
+            level='bodyparts').to_numpy()
+        self.labeled_coords = self.df_train.columns.unique(
+            level='coords').to_numpy()
+
+        print('Reconstructed total rows are :', len(
+            self.df_train) + len(self.df_train_diff) + len(self.df_test))
+
     def disp_marker(self, i_sco, i_ind, i_bod):
         '''
         disp_marker
@@ -400,7 +499,7 @@ class EditLabels():
                     [dis_x, dis_y] = [self.cur_x, self.cur_y]
 
                     # Display bodypart text on image
-                    #print('coordinate', dis_x+20, dis_y-20)
+                    # print('coordinate', dis_x+20, dis_y-20)
                     cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
                                 cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
                 else:
@@ -470,6 +569,46 @@ class EditLabels():
                     cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
                              (dis_x-self.length, dis_y+self.length), color, thickness)
 
+# disp_stable_marker
+    def disp_stable_marker(self, i_sco, i_ind, i_bod):
+        '''
+        disp_stable_marker
+        '''
+        dfs = [self.df_train, self.df_train_diff, self.df_test]
+
+        for i_df in range(len(dfs)):
+            # for _df in dfs:
+            if self.current_frame in dfs[i_df].index:
+                self.disp_stable_marker2(dfs[i_df], i_sco, i_ind, i_bod, i_df)
+
+    def disp_stable_marker2(self, _df, i_sco, i_ind, i_bod, i_df):
+        '''
+        disp_stable_marker2
+            subordinate code for disp_stable_marker
+        '''
+        [tab_x, tab_y] = _df.loc[self.idx[self.current_frame],
+                                 self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+
+        # if value is not empty, display the bodypart marker
+        if not (math.isnan(tab_x) or math.isnan(tab_y)):
+            stored_x = int(tab_x)*self.mag_factor
+            stored_y = int(tab_y)*self.mag_factor
+            label_deleted = False
+
+            # Display cross at the store position
+            [dis_x, dis_y] = [stored_x, stored_y]
+
+        # Draw circle as marker on video
+            if not label_deleted:
+                # differential color for each animal
+                if i_ind == 'sub1':
+                    color = (0, 255, 255)
+                elif i_ind == 'sub2':
+                    color = (0, 255, 255)
+
+                cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                           thickness=1, lineType=8, shift=0)
+
     def freezing_panel(self):
         '''
         # display freezing state panel
@@ -516,13 +655,13 @@ class EditLabels():
         # display premade panel image on freezing panel
         for i in range(2):
             if self.freeze_flag and self.freeze_sub == i:
-                #print('freeze', i)
+                # print('freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.freeze_sign)
             elif self.freeze[self.current_frame, i]:
-                #print('freeze', i)
+                # print('freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.freeze_sign)
             else:
-                #print('no_freeze', i)
+                # print('no_freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.no_freeze_sign)
 
     def coordinate_panel(self):
@@ -739,6 +878,7 @@ class EditLabels():
         print('one label is added')
         self.column_nan[self.current_frame] = self.column_nan[self.current_frame] - 1
 
+# main_loop
     def main_loop(self):
         '''
         Main loop
@@ -779,6 +919,11 @@ class EditLabels():
                     for i_ind in self.individuals:
                         for i_bod in self.bodyparts:
                             self.disp_marker(i_sco, i_ind, i_bod)
+
+                for i_sco in self.labeled_scorer:
+                    for i_ind in self.labeled_individuals:
+                        for i_bod in self.labeled_bodyparts:
+                            self.disp_stable_marker(i_sco, i_ind, i_bod)
 
                 # show video frame
                 cv2.imshow('image', self.img)
