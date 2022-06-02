@@ -58,15 +58,19 @@ class EditLabels():
     EditLabels
     '''
 
-    def __init__(self, h5_path, video, mag_factor, process_list=''):
+    # def __init__(self, h5_path, video, mag_factor, process_list=''):
+    def __init__(self, inferred_video='', inferred_h5='', mag_factor=1, labeled_h5='', labeled_for_train_pickle='', process_list=''):
         '''
         '''
         # multiprocess
         self.process_list = process_list
 
-        self.h5_path = h5_path              # DeepLabCut inferring result file
-        self.video = video                  # video path
+        self.h5_path = inferred_h5              # DeepLabCut inferring result file
+        self.video = inferred_video                  # video path
         self.mag_factor = mag_factor        # magnifying video
+
+        self.labeled_h5 = labeled_h5
+        self.labeled_for_train_pickle = labeled_for_train_pickle
 
         self.status_list = []               # key command list
 
@@ -172,6 +176,8 @@ class EditLabels():
 
         self.mdf[self.mdf_modified].to_hdf(extrxt_dir+'/extracted.h5',
                                            key='df_output', mode='w')
+
+        self.mdf[self.mdf_modified].to_csv(extrxt_dir+'/extracted.csv')
 
         # Extract video frames modified
         for frame in range(self.tots):
@@ -317,10 +323,11 @@ class EditLabels():
         ###################################
         # Generate dataframes for train, train_diff, and test
         #   to show markers for labeled training dataset
-        labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
-        train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
-        self.read_labeled_data(
-            labeled_h5_path=labeled_h5_path, train_pickle_path=train_pickle_path)
+        if self.labeled_h5 != '':
+            # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
+            # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
+            self.read_labeled_data(
+                labeled_h5_path=self.labeled_h5, train_pickle_path=self.labeled_for_train_pickle)
 
         ###################################
         # keyboard commands
@@ -790,12 +797,13 @@ class EditLabels():
 
         # show all labeled coords
         elif self.status == 'show_labels':
-            # toggle the self.show_labels
-            if self.show_labels:
-                self.show_labels = False
-            else:
-                self.show_labels = True
-            self.status = status_pre
+            if self.labeled_h5 != '':
+                # toggle the self.show_labels
+                if self.show_labels:
+                    self.show_labels = False
+                else:
+                    self.show_labels = True
+                self.status = status_pre
 
         # slow down playing speed
         elif self.status == 'slow':
@@ -851,15 +859,17 @@ class EditLabels():
 
         # go to the next labeled frame
         elif self.status == 'jump_next_label':
-            self.status = 'stop'
-            self.current_frame = self.jump_next_label()
-            cv2.setTrackbarPos('S', 'image', self.current_frame)
+            if self.labeled_h5 != '':
+                self.status = 'stop'
+                self.current_frame = self.jump_next_label()
+                cv2.setTrackbarPos('S', 'image', self.current_frame)
 
         # go to the previous labeled frame
         elif self.status == 'jump_pre_label':
-            self.status = 'stop'
-            self.current_frame = self.jump_pre_label()
-            cv2.setTrackbarPos('S', 'image', self.current_frame)
+            if self.labeled_h5 != '':
+                self.status = 'stop'
+                self.current_frame = self.jump_pre_label()
+                cv2.setTrackbarPos('S', 'image', self.current_frame)
 
         # set the p_value to change thickness of cross marker
         elif self.status == 'p_value':
@@ -1022,10 +1032,11 @@ class EditLabels():
                         for i_bod in self.bodyparts:
                             self.disp_marker(i_sco, i_ind, i_bod)
 
-                for i_sco in self.labeled_scorer:
-                    for i_ind in self.labeled_individuals:
-                        for i_bod in self.labeled_bodyparts:
-                            self.disp_stable_marker(i_sco, i_ind, i_bod)
+                if self.labeled_h5 != '':
+                    for i_sco in self.labeled_scorer:
+                        for i_ind in self.labeled_individuals:
+                            for i_bod in self.labeled_bodyparts:
+                                self.disp_stable_marker(i_sco, i_ind, i_bod)
 
                 # show video frame
                 cv2.imshow('image', self.img)
@@ -1349,11 +1360,53 @@ class EditLabels():
         return output_str
 
 
+def read_input(input_csv, i):
+
+    _df = pd.read_csv(input_csv)
+    inferred_path = _df.loc[i, 'inferred_path']
+    inferred_video = _df.loc[i, 'inferred_video']
+    inferred_h5 = _df.loc[i, 'inferred_h5']
+
+    inferred_video = os.path.join(inferred_path, inferred_video)
+    inferred_h5 = os.path.join(inferred_path, inferred_h5)
+
+    training_path = _df.loc[i, 'training_path']
+    labeled_h5 = _df.loc[i, 'labeled_h5']
+    labeled_for_train_pickle = _df.loc[i, 'labeled_for_train_pickle']
+
+    if pd.isna(_df.loc[i, 'training_path']):
+        training_path = ''
+        labeled_h5 = ''
+        labeled_for_train_pickle = ''
+    else:
+        labeled_h5 = os.path.join(training_path, labeled_h5)
+        labeled_for_train_pickle = os.path.join(
+            training_path, labeled_for_train_pickle)
+
+    return inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle
+
+
 if __name__ == '__main__':
 
-    input_h5_path = r'rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
-    input_video = r'rpicam-01_1806_20210722_212134.mp4'
-    input_mag_factor = 1
+    # input data
+    if os.path.exists('input.csv'):
+        inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
+            'input.csv', 0)
+    else:
+        ############################
+        # example data
+        # inferred video
+        inferred_video = r'edit_labels_input_data\rpicam-01_1806_20210722_212134.mp4'
+        # inferred result h5
+        inferred_h5 = r'edit_labels_input_data\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+        # labeled data for training
+        labeled_h5 = r'edit_labels_input_data\CollectedData_DJ.h5'
+        # information which frame is used for training or testing
+        labeled_for_train_pickle = r'edit_labels_input_data\Documentation_data-homecage_test01_95shuffle1.pickle'
 
-    el = EditLabels(input_h5_path, input_video, input_mag_factor)
+    # video display magnification factor
+    mag_factor = 1
+
+    el = EditLabels(inferred_video=inferred_video, inferred_h5=inferred_h5, mag_factor=mag_factor,
+                    labeled_h5=labeled_h5, labeled_for_train_pickle=labeled_for_train_pickle, process_list='')
     el.edit_labels()

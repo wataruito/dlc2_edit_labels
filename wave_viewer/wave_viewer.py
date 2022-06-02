@@ -26,6 +26,7 @@ import matplotlib as mpl
 from PyQt5 import QtCore
 import hdf5storage
 import pandas as pd
+import os
 
 
 class WaveViewerMaster():
@@ -511,24 +512,58 @@ def spawn_wins(process_members, window_spec):
     return process_list
 
 
+def read_input(input_csv, i):
+
+    _df = pd.read_csv(input_csv)
+    inferred_path = _df.loc[i, 'inferred_path']
+    inferred_video = _df.loc[i, 'inferred_video']
+    inferred_h5 = _df.loc[i, 'inferred_h5']
+
+    inferred_video = os.path.join(inferred_path, inferred_video)
+    inferred_h5 = os.path.join(inferred_path, inferred_h5)
+
+    training_path = _df.loc[i, 'training_path']
+    labeled_h5 = _df.loc[i, 'labeled_h5']
+    labeled_for_train_pickle = _df.loc[i, 'labeled_for_train_pickle']
+
+    if pd.isna(_df.loc[i, 'training_path']):
+        training_path = ''
+        labeled_h5 = ''
+        labeled_for_train_pickle = ''
+    else:
+        labeled_h5 = os.path.join(training_path, labeled_h5)
+        labeled_for_train_pickle = os.path.join(
+            training_path, labeled_for_train_pickle)
+
+    return inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle
+
+
 if __name__ == '__main__':
+
+    # input data
+    if os.path.exists('input.csv'):
+        inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
+            'input.csv', 0)
+    else:
+        ############################
+        # example data
+        # inferred result h5
+        inferred_h5 = r'edit_labels_input_data\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
 
     # set window size and position. win_y_len_axis is only for x-axis window.
     window_geo = {'win_x_len': 1000, 'win_y_len': 100, 'win_y_len_axis': 30,
                   'win_x_origin': 0, 'win_y_origin': 0}
 
-    h5_path = r'rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
-
     # set input file for each window
-    input_files = [[h5_path,     'wave']]
-    input_files = [[h5_path,     'raster']]
+    input_files = [[inferred_h5,     'wave']]
+    input_files = [[inferred_h5,     'raster']]
 
     # start each window
     input_process_list = spawn_wins(input_files, window_geo)
 
     # open master window for control
     masterWin = WaveViewerMaster(
-        input_process_list, (0, 20, 1000, 80), h5_path)
+        input_process_list, (0, 20, 1000, 80), inferred_h5)
     masterWin.run()
 
     # wait until all processes stop
