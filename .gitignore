@@ -2,13 +2,11 @@
 .ipynb*
 __py*
 .vscode
-_rpicam*
-rpicam*
-_m154*
 dalton_dlc*
-test_code*
-working*
+test_code_*
+working_*
+edit_labels_output_data
 evaluation-results
 labeled-data
 training-datasets
-
+edit_labels_input_data/rpicam*
