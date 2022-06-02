@@ -9,4 +9,4 @@ edit_labels_output_data
 evaluation-results
 labeled-data
 training-datasets
-edit_labels_input_data/rpicam*
+edit_labels_input_data/rpicam*.mp4
