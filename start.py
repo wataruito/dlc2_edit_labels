@@ -11,7 +11,7 @@ if __name__ == '__main__':
     # input data
     if os.path.exists('input.csv'):
         inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = el.read_input(
-            'input.csv', 0)
+            'input.csv', 1)
     else:
         ############################
         # example data
