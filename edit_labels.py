@@ -3,14 +3,14 @@ dlc2_edit_labels
 
 debugging branch :)
 
-Simple editor to create/edit bodypart lables for DeepLabCut
+Simple editor to create/edit body part labels for DeepLabCut
 
 Using the basic framework from maximus009/VideoPlayer
     https://github.com/maximus009/VideoPlayer
 
 Interface:
 <Video control>
-    w: start palying
+    w: start playing
     s: stop playing
     a: step back a frame
     d: step forward a frame
@@ -18,14 +18,18 @@ Interface:
     e: play slower
     <space>: go to next frame containing nan value
 
+    <: go to previous labeled frame
+    >: go to next labeled frame
+    m: show all labeled coords
+
 <marker manipulation>
     left hold drag: drag a marker
     right click: delete a marker
     r: back to the inferring coords
-    <number>: add bodypart (see number for each bod part in the coordinate window)
-    p: set p_value, which set the boundary between thick and thin cross marking
+    <number>: add body part (see number for each bod part in the coordinate window)
+    p: set threshold p_value, which set the boundary between thick and thin cross marking
 
-<anotating freeze>
+<annotating freeze>
     !: target sub1
     @: target sub2
     j: freezing start, freeze_flag on (first video frame for freeze)
@@ -35,6 +39,7 @@ Interface:
 <mode change>
     0: drug mode
 '''
+
 
 import os
 import time
@@ -46,6 +51,8 @@ import numpy as np
 import pandas as pd
 import cv2
 import pytz
+import re
+import wave_viewer as wv
 
 
 class EditLabels():
@@ -53,13 +60,19 @@ class EditLabels():
     EditLabels
     '''
 
-    def __init__(self, h5_path, video, mag_factor):
+    # def __init__(self, h5_path, video, mag_factor, process_list=''):
+    def __init__(self, inferred_video='', inferred_h5='', mag_factor=1, labeled_h5='', labeled_for_train_pickle='', process_list=''):
         '''
         '''
+        # multiprocess
+        self.process_list = process_list
 
-        self.h5_path = h5_path              # DeepLabCut inferring result file
-        self.video = video                  # video path
+        self.h5_path = inferred_h5              # DeepLabCut inferring result file
+        self.video = inferred_video                  # video path
         self.mag_factor = mag_factor        # magnifying video
+
+        self.labeled_h5 = labeled_h5
+        self.labeled_for_train_pickle = labeled_for_train_pickle
 
         self.status_list = []               # key command list
 
@@ -125,6 +138,8 @@ class EditLabels():
 
         self.column_nan = []
 
+        self.show_labels = False
+
     def edit_labels(self, ):
         '''
         video_cursor
@@ -147,11 +162,11 @@ class EditLabels():
         output_files
         '''
         # write file ([video]_track_freeze.csv) for trajectory and freezing
-        self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
-                        self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
+        # self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
+        #                 self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
 
         # write file ([video]_freeze.csv) for freeze start, end duration
-        self.write_freeze(self.tots, self.freeze, self.video)
+        # self.write_freeze(self.tots, self.freeze, self.video)
 
         # outpur h5 file for extracted frames
         tz_ny = pytz.timezone('America/New_York')
@@ -164,6 +179,8 @@ class EditLabels():
         self.mdf[self.mdf_modified].to_hdf(extrxt_dir+'/extracted.h5',
                                            key='df_output', mode='w')
 
+        self.mdf[self.mdf_modified].to_csv(extrxt_dir+'/extracted.csv')
+
         # Extract video frames modified
         for frame in range(self.tots):
             if self.mdf_modified[frame]:
@@ -172,7 +189,7 @@ class EditLabels():
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
                 _ret, img = self.cap.read()
                 cv2.imwrite(extrxt_dir+"/img" +
-                            "{:03d}".format(frame)+".png", img)
+                            "{:05d}".format(frame)+".png", img)
                 print("Snap of Frame", frame, "Taken!")
 
     def flick(self, _x):
@@ -213,10 +230,10 @@ class EditLabels():
         # Set mouse callback
         cv2.setMouseCallback('image', self.mouse_call_back)
 
-        # Open video file
-        self.cap = cv2.VideoCapture(self.video)
-        # Get the total number of frame
-        self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # # Open video file
+        # self.cap = cv2.VideoCapture(self.video)
+        # # Get the total number of frame
+        # self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         # Add two slider bars
         # for frame position
@@ -261,18 +278,22 @@ class EditLabels():
 
         # I think this is a better way to do it but we shall see.
         # Above comment contains the old version of this code
-        leng = len(self.mdf.loc[1])
-        for i in range(0, len(self.mdf)):
-            temp = 0
-            for j in range(0, leng, 3):
-                if math.isnan(self.mdf.loc[i][j]):
-                    temp = temp + 1
-            self.column_nan.append(temp)
+        # leng = len(self.mdf.loc[1])
+        # for i in range(0, len(self.mdf)):
+        #     temp = 0
+        #     for j in range(0, leng, 3):
+        #         if math.isnan(self.mdf.loc[i][j]):
+        #             temp = temp + 1
+        #     self.column_nan.append(temp)
+
+        # Speed improvement (wi:2022/05/30)
+        self.column_nan = self.mdf.isnull().sum(axis=1).to_numpy()
 
     def initialize_param(self):
         '''
         initialize_param
         '''
+
         ###################################
         # Open video file
         self.cap = cv2.VideoCapture(self.video)
@@ -290,8 +311,16 @@ class EditLabels():
         print("total frame number: {}".format(self.tots))
 
         ###################################
-        # Read DeepLabCut h5 file
+        # Read inferred coordinate from h5 file
         self.mdf = pd.read_hdf(self.h5_path)
+
+        # (20220606 wi: quick fix for DEEPLABCUT DOES NOT generate inferred coords for all frames of the original video)
+        if len(self.mdf) < self.tots:
+            print('### Inferred frames is less than the original video frames ###')
+            print('### self.tots is set as len(self.mdf) :',
+                  len(self.mdf), ' frames ###')
+            self.tots = len(self.mdf)
+
         self.mdf_org = self.mdf.copy()    # Keep original
 
         # Extract data from specific levels
@@ -301,6 +330,20 @@ class EditLabels():
         self.bodyparts = self.mdf.columns.unique(level='bodyparts').to_numpy()
         self.coords = self.mdf.columns.unique(level='coords').to_numpy()
         self.mdf_modified = np.array([False for x in range(self.tots)])
+        self.max_time = len(self.mdf)
+
+        # compute index arrays the likelihood is below the threshold
+        # lh_threshold = 0.1
+        _ = self.comp_likelihood_threshold(lh_threshold=0.1)
+
+        ###################################
+        # Generate dataframes for train, train_diff, and test
+        #   to show markers for labeled training dataset
+        if self.labeled_h5 != '':
+            # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
+            # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
+            self.read_labeled_data(
+                labeled_h5_path=self.labeled_h5, train_pickle_path=self.labeled_for_train_pickle)
 
         ###################################
         # keyboard commands
@@ -315,6 +358,12 @@ class EditLabels():
                             ord('u'): 'erase_freezing',
                             ord('p'): 'p_value',
                             ord('r'): 'reset_to_original',
+
+                            ord('m'): 'show_labels',
+
+                            ord('>'): 'jump_next_label',
+                            ord('<'): 'jump_pre_label',
+
                             -1: 'no_key_press',
                             27: 'exit'}
 
@@ -361,6 +410,125 @@ class EditLabels():
             self.freeze = np.array([[False for x in range(2)]
                                     for y in range(self.tots)])
 
+    def comp_likelihood_threshold(self, lh_threshold=0.1):
+        # compute index arrays the likelihood is below the threshold
+        # lh_threshold = 0.1
+        _events = {}
+        for scorer in self.scorer:
+            for individual in self.individuals:
+                for bodypart in self.bodyparts:
+                    _a = self.mdf[(scorer, individual, bodypart,
+                                   self.coords[2])].isnull().to_numpy()
+                    _b = (self.mdf[(scorer, individual, bodypart,
+                                    self.coords[2])] < lh_threshold).to_numpy()
+                    _events[individual +
+                            bodypart] = self.mdf[np.logical_or(_a, _b)].index.to_numpy()
+        events = list(_events.values())
+
+        # print out the ratio of Nan or below the threshold to the total video frames
+        print('## The ratio of Nan to the entire video frames. (total: ',
+              self.max_time, ' frames)')
+        for individual in self.individuals:
+            for bodypart in self.bodyparts:
+                print('{0}: {1:8.2f}'.format(individual + bodypart,
+                                             len(_events[individual + bodypart]) / self.max_time))
+
+        return events
+
+    def prep_df(self, _df_org, image_names):
+        '''
+        # Extract labeled data by image_names list and
+        # reset the index to the frame number same as in the inferred dataframe
+        '''
+
+        idx = pd.IndexSlice
+
+        # extract
+        _df = _df_org.loc[idx[:, :, image_names], :]
+        _df = _df.reset_index()
+
+        # generate the frame number for column ''.
+        _df[''] = [int(re.search('img(.+?).png', text).group(1))
+                   for text in _df['level_2'].to_numpy()]
+
+        # set index on the created frame number
+        _df = _df.set_index('', drop=True)
+        _df = _df.drop(['level_0', 'level_1', 'level_2'], axis=1, level=0)
+
+        return _df
+
+    def read_labeled_data(self, labeled_h5_path='', train_pickle_path=''):
+
+        #################################
+        # Identify video frame IDs used for training and testing
+
+        #################################
+        # Read files
+        # read the pickle file for training
+        # pickle_path = 'training-datasets/homecage_test01_DJ95shuffle1.pickle'
+        # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
+        _df_train_dataset = pd.read_pickle(train_pickle_path)
+
+        # read the h5 file for the labeled frames
+        # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
+        _df_labeled_dataset = pd.read_hdf(labeled_h5_path)
+
+        #################################
+        # Extract lists of image_names for train, train2, and test
+
+        # train_image_names
+        #   dataframe of labeled coords for each video frame used for training
+        _df_train_coords = _df_train_dataset[0]
+        #   extract image names to an array
+        train_image_names = [_df_train_coords[x]['image'][2]
+                             for x in range(len(_df_train_coords))]
+        train_image_names.sort()
+        # print(train_image_names)
+
+        # train2_image_names/train_image_names_diff
+        #   list of video frame IDs for training (It has additional 2 frames)
+        _df_train2_ids = _df_train_dataset[1]
+        _df_train2_ids.sort()
+        train2_image_names = list(
+            _df_labeled_dataset.iloc[_df_train2_ids].reset_index()['level_2'].to_numpy())
+        #   check the difference between train_image_names and train2_image_names
+        #   Get difference between two lists
+        #   https://stackoverflow.com/questions/3462143/get-difference-between-two-lists
+        train_image_names_diff = list(
+            (set(train2_image_names).difference(set(train_image_names))))
+
+        # test_image_names
+        #   list of video frame IDs for testing
+        _df_test_ids = _df_train_dataset[2]
+        _df_test_ids.sort()
+        test_image_names = list(_df_labeled_dataset.iloc[_df_test_ids].reset_index()[
+                                'level_2'].to_numpy())
+
+        #################################
+        # Extract the datasets for train, train_diff and test from the labeled dataset
+
+        self.df_train = self.prep_df(_df_labeled_dataset, train_image_names)
+        self.df_train_diff = self.prep_df(
+            _df_labeled_dataset, train_image_names_diff)
+        self.df_test = self.prep_df(_df_labeled_dataset, test_image_names)
+
+        # Extract data from specific levels
+        self.labeled_scorer = self.df_train.columns.unique(
+            level='scorer').to_numpy()
+        self.labeled_individuals = self.df_train.columns.unique(
+            level='individuals').to_numpy()
+        self.labeled_bodyparts = self.df_train.columns.unique(
+            level='bodyparts').to_numpy()
+        self.labeled_coords = self.df_train.columns.unique(
+            level='coords').to_numpy()
+
+        print('Reconstructed total rows are :', len(
+            self.df_train) + len(self.df_train_diff) + len(self.df_test))
+
+        # Create array of all labeled coord
+        self.labeled_data = np.column_stack((self.df_train.loc[self.idx[:], self.idx[:, :, :, ('x')]].to_numpy().flatten(),
+                                             self.df_train.loc[self.idx[:], self.idx[:, :, :, ('y')]].to_numpy().flatten()))
+
     def disp_marker(self, i_sco, i_ind, i_bod):
         '''
         disp_marker
@@ -395,7 +563,7 @@ class EditLabels():
                     [dis_x, dis_y] = [self.cur_x, self.cur_y]
 
                     # Display bodypart text on image
-                    #print('coordinate', dis_x+20, dis_y-20)
+                    # print('coordinate', dis_x+20, dis_y-20)
                     cv2.putText(self.img, i_bod, (dis_x+20, dis_y-20),
                                 cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 0, 0))
                 else:
@@ -465,6 +633,72 @@ class EditLabels():
                     cv2.line(self.img, (dis_x+self.length, dis_y-self.length),
                              (dis_x-self.length, dis_y+self.length), color, thickness)
 
+    def disp_stable_marker(self, i_sco, i_ind, i_bod):
+        '''
+        disp_stable_marker
+        '''
+        dfs = [self.df_train, self.df_train_diff, self.df_test]
+
+        for i_df in range(len(dfs)):
+            # for _df in dfs:
+            if self.current_frame in dfs[i_df].index:
+                self.disp_stable_marker2(dfs[i_df], i_sco, i_ind, i_bod, i_df)
+
+    def disp_stable_marker2(self, _df, i_sco, i_ind, i_bod, i_df):
+        '''
+        disp_stable_marker2
+            subordinate code for disp_stable_marker
+        '''
+        [tab_x, tab_y] = _df.loc[self.idx[self.current_frame],
+                                 self.idx[i_sco, i_ind, i_bod, :]].to_numpy()
+
+        # if value is not empty, display the bodypart marker
+        if not (math.isnan(tab_x) or math.isnan(tab_y)):
+            stored_x = int(tab_x)*self.mag_factor
+            stored_y = int(tab_y)*self.mag_factor
+            label_deleted = False
+
+            # Display cross at the store position
+            [dis_x, dis_y] = [stored_x, stored_y]
+
+        # Draw circle as marker on video
+            if not label_deleted:
+                # differential color for each animal
+                if i_ind == 'sub1':
+                    color = (0, 255, 255)
+                elif i_ind == 'sub2':
+                    color = (0, 255, 255)
+
+                cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                           thickness=1, lineType=8, shift=0)
+
+    def disp_all_labels(self):
+        # def disp_stable_marker2(self, _df, i_sco, i_ind, i_bod, i_df):
+        '''
+        disp_all_labels()
+            display all labeled coords
+        '''
+        for i in range(len(self.labeled_data)):
+
+            [tab_x, tab_y] = self.labeled_data[i]
+
+            # if value is not empty, display the bodypart marker
+            if not (math.isnan(tab_x) or math.isnan(tab_y)):
+                stored_x = int(tab_x)*self.mag_factor
+                stored_y = int(tab_y)*self.mag_factor
+                label_deleted = False
+
+                # Display cross at the store position
+                [dis_x, dis_y] = [stored_x, stored_y]
+
+            # Draw circle as marker on video
+                # if not label_deleted:
+                # differential color for each animal
+                color = (0, 255, 255)
+
+                cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                           thickness=1, lineType=8, shift=0)
+
     def freezing_panel(self):
         '''
         # display freezing state panel
@@ -511,13 +745,13 @@ class EditLabels():
         # display premade panel image on freezing panel
         for i in range(2):
             if self.freeze_flag and self.freeze_sub == i:
-                #print('freeze', i)
+                # print('freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.freeze_sign)
             elif self.freeze[self.current_frame, i]:
-                #print('freeze', i)
+                # print('freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.freeze_sign)
             else:
-                #print('no_freeze', i)
+                # print('no_freeze', i)
                 cv2.imshow(self.sub_freeze[i], self.no_freeze_sign)
 
     def coordinate_panel(self):
@@ -526,7 +760,7 @@ class EditLabels():
         '''
         # display coordinates on coordinate panel
         # Create new blank image
-        width, height = 400, 180
+        width, height = 600, 180
         # white = (255, 255, 255)
         black = (0, 0, 0)
         coords_blank = self.create_blank(width, height, rgb_color=black)
@@ -602,6 +836,16 @@ class EditLabels():
             cv2.setTrackbarPos('S', 'image', self.current_frame)
             self.status = 'stop'
 
+        # show all labeled coords
+        elif self.status == 'show_labels':
+            if self.labeled_h5 != '':
+                # toggle the self.show_labels
+                if self.show_labels:
+                    self.show_labels = False
+                else:
+                    self.show_labels = True
+                self.status = status_pre
+
         # slow down playing speed
         elif self.status == 'slow':
             self.frame_rate = max(self.frame_rate - 1, 0)
@@ -618,13 +862,13 @@ class EditLabels():
         #     self.mode = 'drag_mode'
         #     status = status_pre
 
-        # target for anotating freeze to sub1
+        # target for annotating freeze to sub1
         elif self.status == 'target_sub1':
             self.freeze_sub = 0
             self.freeze_sub_change = True
             self.status = status_pre
 
-        # target for anotating freeze to sub2
+        # target for annotating freeze to sub2
         elif self.status == 'target_sub2':
             self.freeze_sub = 1
             self.freeze_sub_change = True
@@ -654,10 +898,24 @@ class EditLabels():
             self.current_frame = self.jump_nan()
             cv2.setTrackbarPos('S', 'image', self.current_frame)
 
+        # go to the next labeled frame
+        elif self.status == 'jump_next_label':
+            if self.labeled_h5 != '':
+                self.status = 'stop'
+                self.current_frame = self.jump_next_label()
+                cv2.setTrackbarPos('S', 'image', self.current_frame)
+
+        # go to the previous labeled frame
+        elif self.status == 'jump_pre_label':
+            if self.labeled_h5 != '':
+                self.status = 'stop'
+                self.current_frame = self.jump_pre_label()
+                cv2.setTrackbarPos('S', 'image', self.current_frame)
+
         # set the p_value to change thickness of cross marker
         elif self.status == 'p_value':
             self.status = 'stop'
-            print("Please input p_value threshould: ", end='')
+            print("Please input p_value threshold: ", end='')
             self.p_value = float(input())
 
         # snap the current frame to file
@@ -672,7 +930,7 @@ class EditLabels():
             self.add_label(self.scorer[0], self.status[1], self.status[2])
             self.status = 'stop'
 
-        # go back to original coordiante for a bodypart marker which is moved
+        # go back to original coordinate for a bodypart marker which is moved
         elif self.status == 'reset_to_original':
             self.reset_to_original()
             self.status = 'stop'
@@ -710,6 +968,42 @@ class EditLabels():
                         break
         return frame
 
+    def jump_next_label(self):
+        '''
+        jump_next_label
+        '''
+        find = False
+
+        for frame in range(self.current_frame+1, len(self.mdf)):
+            if frame in self.df_train.index:
+                find = True
+                return frame
+
+        if not find:
+            for frame in range(0, self.current_frame):
+                if frame in self.df_train.index:
+                    return frame
+
+        return self.current_frame
+
+    def jump_pre_label(self):
+        '''
+        jump_pre_label
+        '''
+        find = False
+
+        for frame in range(self.current_frame-1, 0, -1):
+            if frame in self.df_train.index:
+                find = True
+                return frame
+
+        if not find:
+            for frame in range(len(self.mdf), self.current_frame, -1):
+                if frame in self.df_train.index:
+                    return frame
+
+        return self.current_frame
+
     def reset_to_original(self):
         '''
         reset_to_original
@@ -740,9 +1034,11 @@ class EditLabels():
         '''
         while True:
             try:
+                # store current_frame
+                current_frame_bk = self.current_frame
                 # If reach to the end, play from the begining
                 # if current_frame==tots-1:
-                if self.current_frame == self.tots:
+                if (self.current_frame == self.tots):
                     self.current_frame = 0
 
                 # read a video frame
@@ -765,6 +1061,10 @@ class EditLabels():
                 self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
                 self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
 
+                # display all labeled coords
+                if self.show_labels:
+                    self.disp_all_labels()
+
                 # Display markers for each bodyparts
                 # Loop for all bodyparts
                 #   scorer -> individuals -> bodyparts
@@ -772,6 +1072,12 @@ class EditLabels():
                     for i_ind in self.individuals:
                         for i_bod in self.bodyparts:
                             self.disp_marker(i_sco, i_ind, i_bod)
+
+                if self.labeled_h5 != '':
+                    for i_sco in self.labeled_scorer:
+                        for i_ind in self.labeled_individuals:
+                            for i_bod in self.labeled_bodyparts:
+                                self.disp_stable_marker(i_sco, i_ind, i_bod)
 
                 # show video frame
                 cv2.imshow('image', self.img)
@@ -782,11 +1088,31 @@ class EditLabels():
                 # display coordinates and p_value on coordinate panel
                 self.coordinate_panel()
 
-                # keyborad command
+                # keyboard command
                 # Read key input
                 status_new = self.status_list[cv2.waitKey(1)]
+
+                # Quit app procedure
                 if self.key_comm(status_new):
+
+                    if self.process_list != '':
+                        # send pressed key and the extent to each process
+                        for _process_id_key in self.process_list:
+                            self.process_list[_process_id_key][1].put('e')
                     break
+                # Regular loop
+                else:
+                    if self.process_list != '':
+                        # send current_frame to subwindows only when change
+                        if current_frame_bk != self.current_frame:
+                            # send pressed key and the extent to each process
+                            for _process_id_key in self.process_list:
+                                self.process_list[_process_id_key][1].put(
+                                    self.current_frame)
+
+                            # wait for completion of task
+                            for _process_id_key in self.process_list:
+                                self.process_list[_process_id_key][1].join()
 
             except KeyError:
                 print("Invalid Key was pressed")
@@ -1075,11 +1401,79 @@ class EditLabels():
         return output_str
 
 
+def read_input(input_csv, i):
+
+    _df = pd.read_csv(input_csv)
+    inferred_path = _df.loc[i, 'inferred_path']
+    inferred_video = _df.loc[i, 'inferred_video']
+    inferred_h5 = _df.loc[i, 'inferred_h5']
+
+    inferred_video = os.path.join(inferred_path, inferred_video)
+    inferred_h5 = os.path.join(inferred_path, inferred_h5)
+
+    training_path = _df.loc[i, 'training_path']
+    labeled_h5 = _df.loc[i, 'labeled_h5']
+    labeled_for_train_pickle = _df.loc[i, 'labeled_for_train_pickle']
+
+    if pd.isna(_df.loc[i, 'training_path']):
+        training_path = ''
+        labeled_h5 = ''
+        labeled_for_train_pickle = ''
+    else:
+        labeled_h5 = os.path.join(training_path, labeled_h5)
+        labeled_for_train_pickle = os.path.join(
+            training_path, labeled_for_train_pickle)
+
+    return inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle
+
+
+def start(inferred_video='', inferred_h5='',
+          labeled_h5='', labeled_for_train_pickle='',
+          mag_factor=1, window_geo='', plot_type=''):
+
+    input_process_list = ''
+
+    if plot_type in ['raster', 'wave']:
+        # set input_file for plotting window
+        input_files = [[inferred_h5,     plot_type]]
+
+        # start each window
+        input_process_list = wv.spawn_wins(input_files, window_geo)
+
+    masterWin = EditLabels(inferred_video=inferred_video, inferred_h5=inferred_h5, mag_factor=mag_factor,
+                           labeled_h5=labeled_h5, labeled_for_train_pickle=labeled_for_train_pickle, process_list=input_process_list)
+    masterWin.edit_labels()
+
+    if plot_type in ['raster', 'wave']:
+        # wait until all processes stop
+        for _process_id_key in input_process_list:
+            input_process_list[_process_id_key][0].join()
+
+
 if __name__ == '__main__':
 
-    input_h5_path = r'rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
-    input_video = r'rpicam-01_1806_20210722_212134.mp4'
-    input_mag_factor = 1
+    # input data
+    if os.path.exists('input.csv'):
+        inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
+            'input.csv', 1)
+    else:
+        ############################
+        # example data
+        # inferred video
+        inferred_video = r'input_data\rpicam-01_1806_20210722_212134.mp4'
+        # inferred result h5
+        inferred_h5 = r'input_data\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+        # labeled data for training
+        labeled_h5 = r'input_data\CollectedData_DJ.h5'
+        # information which frame is used for training or testing
+        labeled_for_train_pickle = r'input_data\Documentation_data-homecage_test01_95shuffle1.pickle'
 
-    el = EditLabels(input_h5_path, input_video, input_mag_factor)
-    el.edit_labels()
+    # video display magnification factor
+    mag_factor = 1
+    # set window size and position. win_y_len_axis is only for x-axis window.
+    window_geo = {'win_x_len': 1000, 'win_y_len': 100, 'win_y_len_axis': 30,
+                  'win_x_origin': 0, 'win_y_origin': 0}
+
+    start(inferred_video=inferred_video, inferred_h5=inferred_h5,
+          labeled_h5=labeled_h5, labeled_for_train_pickle=labeled_for_train_pickle,
+          mag_factor=mag_factor, window_geo=window_geo, plot_type='raster')
