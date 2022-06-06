@@ -162,11 +162,11 @@ class EditLabels():
         output_files
         '''
         # write file ([video]_track_freeze.csv) for trajectory and freezing
-        self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
-                        self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
+        # self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
+        #                 self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
 
         # write file ([video]_freeze.csv) for freeze start, end duration
-        self.write_freeze(self.tots, self.freeze, self.video)
+        # self.write_freeze(self.tots, self.freeze, self.video)
 
         # outpur h5 file for extracted frames
         tz_ny = pytz.timezone('America/New_York')
@@ -189,7 +189,7 @@ class EditLabels():
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
                 _ret, img = self.cap.read()
                 cv2.imwrite(extrxt_dir+"/img" +
-                            "{:03d}".format(frame)+".png", img)
+                            "{:05d}".format(frame)+".png", img)
                 print("Snap of Frame", frame, "Taken!")
 
     def flick(self, _x):
@@ -230,10 +230,10 @@ class EditLabels():
         # Set mouse callback
         cv2.setMouseCallback('image', self.mouse_call_back)
 
-        # Open video file
-        self.cap = cv2.VideoCapture(self.video)
-        # Get the total number of frame
-        self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        # # Open video file
+        # self.cap = cv2.VideoCapture(self.video)
+        # # Get the total number of frame
+        # self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
         # Add two slider bars
         # for frame position
@@ -293,6 +293,7 @@ class EditLabels():
         '''
         initialize_param
         '''
+
         ###################################
         # Open video file
         self.cap = cv2.VideoCapture(self.video)
@@ -310,8 +311,16 @@ class EditLabels():
         print("total frame number: {}".format(self.tots))
 
         ###################################
-        # Read DeepLabCut h5 file
+        # Read inferred coordinate from h5 file
         self.mdf = pd.read_hdf(self.h5_path)
+
+        # (20220606 wi: quick fix for DEEPLABCUT DOES NOT generate inferred coords for all frames of the original video)
+        if len(self.mdf) < self.tots:
+            print('### Inferred frames is less than the original video frames ###')
+            print('### self.tots is set as len(self.mdf) :',
+                  len(self.mdf), ' frames ###')
+            self.tots = len(self.mdf)
+
         self.mdf_org = self.mdf.copy()    # Keep original
 
         # Extract data from specific levels
@@ -321,6 +330,11 @@ class EditLabels():
         self.bodyparts = self.mdf.columns.unique(level='bodyparts').to_numpy()
         self.coords = self.mdf.columns.unique(level='coords').to_numpy()
         self.mdf_modified = np.array([False for x in range(self.tots)])
+        self.max_time = len(self.mdf)
+
+        # compute index arrays the likelihood is below the threshold
+        # lh_threshold = 0.1
+        _ = self.comp_likelihood_threshold(lh_threshold=0.1)
 
         ###################################
         # Generate dataframes for train, train_diff, and test
@@ -395,6 +409,31 @@ class EditLabels():
                                  for y in range(self.tots)])
             self.freeze = np.array([[False for x in range(2)]
                                     for y in range(self.tots)])
+
+    def comp_likelihood_threshold(self, lh_threshold=0.1):
+        # compute index arrays the likelihood is below the threshold
+        # lh_threshold = 0.1
+        _events = {}
+        for scorer in self.scorer:
+            for individual in self.individuals:
+                for bodypart in self.bodyparts:
+                    _a = self.mdf[(scorer, individual, bodypart,
+                                   self.coords[2])].isnull().to_numpy()
+                    _b = (self.mdf[(scorer, individual, bodypart,
+                                    self.coords[2])] < lh_threshold).to_numpy()
+                    _events[individual +
+                            bodypart] = self.mdf[np.logical_or(_a, _b)].index.to_numpy()
+        events = list(_events.values())
+
+        # print out the ratio of Nan or below the threshold to the total video frames
+        print('## The ratio of Nan to the entire video frames. (total: ',
+              self.max_time, ' frames)')
+        for individual in self.individuals:
+            for bodypart in self.bodyparts:
+                print('{0}: {1:8.2f}'.format(individual + bodypart,
+                                             len(_events[individual + bodypart]) / self.max_time))
+
+        return events
 
     def prep_df(self, _df_org, image_names):
         '''
@@ -999,7 +1038,7 @@ class EditLabels():
                 current_frame_bk = self.current_frame
                 # If reach to the end, play from the begining
                 # if current_frame==tots-1:
-                if self.current_frame == self.tots:
+                if (self.current_frame == self.tots):
                     self.current_frame = 0
 
                 # read a video frame
