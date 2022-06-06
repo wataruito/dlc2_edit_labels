@@ -170,7 +170,7 @@ class WaveViewer(multiprocessing.Process):
         run
         '''
         ###################################
-        # Read DeepLabCut h5 file
+        # Read h5 file for inferred coords
         self.mdf = pd.read_hdf(self.h5_path)
         # self.mdf_org = self.mdf.copy()    # Keep original
         # Extract data from specific levels
@@ -259,26 +259,8 @@ class WaveViewer(multiprocessing.Process):
                 [self.t_cur, self.t_cur], self.cur_line[self.d_type], 'k--')
 
         if self.d_type == 'raster':
-            # compute index arrays the likelihood is below the threshold
-            lh_threshold = 0.1
-            _events = {}
-            for scorer in self.scorers:
-                for individual in self.individuals:
-                    for bodypart in self.bodyparts:
-                        _a = self.mdf[(scorer, individual, bodypart,
-                                       self.coords[2])].isnull().to_numpy()
-                        _b = (self.mdf[(scorer, individual, bodypart,
-                              self.coords[2])] < lh_threshold).to_numpy()
-                        _events[individual +
-                                bodypart] = self.mdf[np.logical_or(_a, _b)].index.to_numpy()
-            events = list(_events.values())
 
-            print('## The ratio of Nan to the entire video frames. (total: ',
-                  self.max_time, ' frames)')
-            for individual in self.individuals:
-                for bodypart in self.bodyparts:
-                    print('{0}: {1:8.2f}'.format(individual + bodypart,
-                          len(_events[individual + bodypart]) / self.max_time))
+            events = self.comp_likelihood_threshold(lh_threshold=0.1)
 
             colors = np.array(['g', 'g', 'g', 'g', 'r', 'r', 'r', 'r'])
 
@@ -298,6 +280,31 @@ class WaveViewer(multiprocessing.Process):
             plt.yticks([])
 
         self.ax_subplot.set_xlim(t_min, t_max)
+
+    def comp_likelihood_threshold(self, lh_threshold=0.1):
+        # compute index arrays the likelihood is below the threshold
+        # lh_threshold = 0.1
+        _events = {}
+        for scorer in self.scorers:
+            for individual in self.individuals:
+                for bodypart in self.bodyparts:
+                    _a = self.mdf[(scorer, individual, bodypart,
+                                   self.coords[2])].isnull().to_numpy()
+                    _b = (self.mdf[(scorer, individual, bodypart,
+                                    self.coords[2])] < lh_threshold).to_numpy()
+                    _events[individual +
+                            bodypart] = self.mdf[np.logical_or(_a, _b)].index.to_numpy()
+        events = list(_events.values())
+
+        # print out the ratio of Nan or below the threshold to the total video frames
+        print('## The ratio of Nan to the entire video frames. (total: ',
+              self.max_time, ' frames)')
+        for individual in self.individuals:
+            for bodypart in self.bodyparts:
+                print('{0}: {1:8.2f}'.format(individual + bodypart,
+                                             len(_events[individual + bodypart]) / self.max_time))
+
+        return events
 
     def timer_call_back(self):
         '''
