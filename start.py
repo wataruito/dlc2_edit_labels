@@ -12,7 +12,7 @@ if __name__ == '__main__':
     if os.path.exists('input.csv'):
         print('input.csv found!')
         inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = el.read_input(
-            'input.csv', 3)
+            'input.csv', 1)
     else:
         ############################
         # example data
