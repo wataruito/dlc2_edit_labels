@@ -1,6 +1,5 @@
 2022*
 .ipynb*
-<<<<<<< HEAD
 __py*
 .vscode
 dalton_dlc*
@@ -12,11 +11,4 @@ labeled-data
 training-datasets
 input_data/rpicam*.mp4
 extracted
-=======
-.vscode
-__pycache__
-_rpicam*
-rpicam*
 
-
->>>>>>> 87cdd3fb3c0d043b7d0831210ebcf57d0f43d9f3
