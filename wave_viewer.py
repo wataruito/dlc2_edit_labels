@@ -265,7 +265,8 @@ class WaveViewer(multiprocessing.Process):
             colors = np.array(['g', 'g', 'g', 'g', 'r', 'r', 'r', 'r'])
 
             self.ax_subplot.eventplot(
-                np.flip(events, 0), linelengths=0.8, colors=np.flip(colors))
+                np.flip(np.asarray(events, dtype=object), 0), linelengths=0.8, colors=np.flip(colors))
+            # events, linelengths=0.8, colors=colors)
 
             self.lines = self.ax_subplot.plot(
                 [self.t_cur, self.t_cur], [-0.5, 7.5], 'k--')
@@ -293,16 +294,17 @@ class WaveViewer(multiprocessing.Process):
                     _b = (self.mdf[(scorer, individual, bodypart,
                                     self.coords[2])] < lh_threshold).to_numpy()
                     _events[individual +
-                            bodypart] = self.mdf[np.logical_or(_a, _b)].index.to_numpy()
+                            bodypart] = self.mdf[np.logical_or(_a, _b)].index.to_numpy(dtype=object)
         events = list(_events.values())
+        events = [events[x].astype('object') for x in range(len(events))]
 
         # print out the ratio of Nan or below the threshold to the total video frames
-        print('## The ratio of Nan to the entire video frames. (total: ',
-              self.max_time, ' frames)')
-        for individual in self.individuals:
-            for bodypart in self.bodyparts:
-                print('{0}: {1:8.2f}'.format(individual + bodypart,
-                                             len(_events[individual + bodypart]) / self.max_time))
+        # print('## The ratio of Nan to the entire video frames. (total: ',
+        #       self.max_time, ' frames)')
+        # for individual in self.individuals:
+        #     for bodypart in self.bodyparts:
+        #         print('{0}: {1:8.2f}'.format(individual + bodypart,
+        #                                      len(_events[individual + bodypart]) / self.max_time))
 
         return events
 
@@ -346,46 +348,6 @@ class WaveViewer(multiprocessing.Process):
 
             self.task_queue.task_done()
 
-        return True
-
-    def timer_call_back_org(self):
-        '''
-        timer_call_back
-        '''
-        if not self.task_queue.empty():
-            # next_task = self.task_queue.get()
-            event = self.task_queue.get()
-
-            shift = self.t_width/16.0
-
-            if event == 'right':
-                self.t_cur = self.t_cur + shift
-            elif event == 'left':
-                self.t_cur = self.t_cur - shift
-            elif event == 'up':
-                self.t_width = self.t_width * 2.0
-            elif event == 'down':
-                self.t_width = self.t_width / 2.0
-
-            # view window cannot be bigger than max_time
-            if self.t_width > self.max_time:
-                self.t_width = self.max_time
-            # center cannot move beyond max_time
-            if self.t_cur + self.t_width/2.0 > self.max_time:
-                self.t_cur = self.max_time - self.t_width/2.0
-            # center cannot move below 0
-            if self.t_cur - self.t_width/2.0 < 0.0:
-                self.t_cur = 0.0 + self.t_width/2.0
-
-            if event in ('right', 'left', 'up', 'down'):
-                self.update_plot()
-            elif event == 'm':
-                self.move_window()
-            else:
-                self.cmd_interp(event)
-                self.update_plot()
-
-            self.task_queue.task_done()
         return True
 
     def local_key_call_back(self, event):
@@ -519,7 +481,7 @@ def spawn_wins(process_members, window_spec):
     return process_list
 
 
-def read_input(input_csv, i):
+def read_input2(input_csv, i):
 
     _df = pd.read_csv(input_csv)
     inferred_path = _df.loc[i, 'inferred_path']
@@ -546,16 +508,19 @@ def read_input(input_csv, i):
 
 
 if __name__ == '__main__':
-
+    import edit_labels as el
     # input data
-    if os.path.exists('input.csv'):
-        inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
-            'input.csv', 0)
+
+    input_path = 'input.xlsx'
+
+    if os.path.exists(input_path):
+        inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = el.read_input(
+            input_path, 0)
     else:
         ############################
         # example data
         # inferred result h5
-        inferred_h5 = r'edit_labels_input_data\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+        inferred_h5 = r'input_data\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
 
     # set window size and position. win_y_len_axis is only for x-axis window.
     window_geo = {'win_x_len': 1000, 'win_y_len': 100, 'win_y_len_axis': 30,

@@ -40,19 +40,33 @@ Interface:
     0: drug mode
 '''
 
-
 import os
 import time
 import math
 import collections
 import csv
 from datetime import datetime
+from click import pass_context
 import numpy as np
 import pandas as pd
 import cv2
 import pytz
 import re
 import wave_viewer as wv
+import traceback
+
+import traceback
+import warnings
+import sys
+
+################################
+# To locate warning line
+# def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
+#     log = file if hasattr(file, 'write') else sys.stderr
+#     traceback.print_stack(file=log)
+#     log.write(warnings.formatwarning(
+#         message, category, filename, lineno, line))
+# warnings.showwarning = warn_with_traceback
 
 
 class EditLabels():
@@ -60,19 +74,32 @@ class EditLabels():
     EditLabels
     '''
 
-    # def __init__(self, h5_path, video, mag_factor, process_list=''):
+################################
+# __init__
     def __init__(self, inferred_video='', inferred_h5='', mag_factor=1, labeled_h5='', labeled_for_train_pickle='', process_list=''):
+        # def __init__(self, h5_path, video, mag_factor, process_list=''):
         '''
         '''
-        # multiprocess
+        # for multi-process
         self.process_list = process_list
 
-        self.h5_path = inferred_h5              # DeepLabCut inferring result file
-        self.video = inferred_video                  # video path
-        self.mag_factor = mag_factor        # magnifying video
+        # input files
+        self.video = inferred_video             # inferred video path
+        self.h5_path = inferred_h5              # inferred coordinate h5 file by DeepLabCut
 
-        self.labeled_h5 = labeled_h5
+        self.labeled_h5 = labeled_h5            # labeled coordinate h5 file
         self.labeled_for_train_pickle = labeled_for_train_pickle
+        # detail for self.labeled_h5 file
+
+        self.mag_factor = mag_factor            # magnifying video
+
+        # set flag for initial labeling
+
+        # if os.path.splitext(self.h5_path)[1] != '.h5' and os.path.splitext(self.labeled_for_train_pickle)[1] != '.pickle':
+        if self.h5_path == '' and self.labeled_for_train_pickle == '':
+            self.initial_label = True
+        else:
+            self.initial_label = False
 
         self.status_list = []               # key command list
 
@@ -140,6 +167,8 @@ class EditLabels():
 
         self.show_labels = False
 
+################################
+# Start edit_labels
     def edit_labels(self, ):
         '''
         video_cursor
@@ -147,6 +176,7 @@ class EditLabels():
         # global cur_x, cur_y, drag, rclick, mode, pixel_limit
 
         self.initialize_param()
+
         self.initialize_windows()
 
         self.main_loop()
@@ -157,138 +187,8 @@ class EditLabels():
         self.cap.release()
         cv2.destroyAllWindows()
 
-    def output_files(self):
-        '''
-        output_files
-        '''
-        # write file ([video]_track_freeze.csv) for trajectory and freezing
-        # self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
-        #                 self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
-
-        # write file ([video]_freeze.csv) for freeze start, end duration
-        # self.write_freeze(self.tots, self.freeze, self.video)
-
-        # outpur h5 file for extracted frames
-        tz_ny = pytz.timezone('America/New_York')
-        now = datetime.now(tz_ny)
-        extrxt_dir = os.path.join(
-            './', now.strftime("%Y%m%d-%H%M%S") + '-extracted')
-        if not os.path.isdir(extrxt_dir):
-            os.mkdir(extrxt_dir)
-
-        self.mdf[self.mdf_modified].to_hdf(extrxt_dir+'/extracted.h5',
-                                           key='df_output', mode='w')
-
-        self.mdf[self.mdf_modified].to_csv(extrxt_dir+'/extracted.csv')
-
-        # Extract video frames modified
-        for frame in range(self.tots):
-            if self.mdf_modified[frame]:
-                print("frame = ", frame, " is modified", end=": ")
-                # read one video frame
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
-                _ret, img = self.cap.read()
-                cv2.imwrite(extrxt_dir+"/img" +
-                            "{:05d}".format(frame)+".png", img)
-                print("Snap of Frame", frame, "Taken!")
-
-    def flick(self, _x):
-        '''
-        flick
-        '''
-        # pass
-
-    def mouse_call_back(self, event, read_x, read_y, _flags, _param):
-        '''
-        dragging
-
-        Mouse events handler
-        '''
-        # global cur_x, cur_y, drag, rclick, mode, pixel_limit
-        if event == cv2.EVENT_LBUTTONDOWN:
-            if self.mode == 'drag_mode':
-                self.drag = True
-                self.cur_x, self.cur_y = read_x, read_y
-        elif event == cv2.EVENT_LBUTTONUP:
-            self.drag = False
-        elif event == cv2.EVENT_MOUSEMOVE:
-            self.cur_x, self.cur_y = read_x, read_y
-        elif event == cv2.EVENT_RBUTTONDOWN:
-            self.cur_x, self.cur_y = read_x, read_y
-            self.rclick = True
-        elif event == cv2.EVENT_RBUTTONUP:
-            self.rclick = False
-
-    def initialize_windows(self):
-        '''
-        initialize_windows
-        '''
-        ###################################
-        # Initialize main video windows
-        cv2.namedWindow('image')
-        cv2.moveWindow('image', 250, 300)
-        # Set mouse callback
-        cv2.setMouseCallback('image', self.mouse_call_back)
-
-        # # Open video file
-        # self.cap = cv2.VideoCapture(self.video)
-        # # Get the total number of frame
-        # self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        # Add two slider bars
-        # for frame position
-        cv2.createTrackbar('S', 'image', 0, int(self.tots)-1, self.flick)
-        cv2.setTrackbarPos('S', 'image', 0)
-        # for play speed (fps)
-        cv2.createTrackbar('F', 'image', 1, 100, self.flick)
-        cv2.setTrackbarPos('F', 'image', self.frame_rate)
-        # cv2.setTrackbarPos('F','image',0)
-
-        ##################################
-        # Initialize freeze indicator window for each subject
-        self.sub_freeze = ['sub1_freeze', 'sub2_freeze']
-        # animal 1
-        cv2.namedWindow(self.sub_freeze[0])
-        cv2.moveWindow(self.sub_freeze[0], 250, 50)
-        # animal 2
-        cv2.namedWindow(self.sub_freeze[1])
-        cv2.moveWindow(self.sub_freeze[1], 600, 50)
-
-        # Create image showing freeze/no_freeze
-        # freeze
-        width, height = 200, 50
-        self.freeze_sign = self.create_blank(width, height, rgb_color=self.red)
-        cv2.putText(self.freeze_sign, "Freeze", (40, 35),
-                    cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
-        # no_freeze
-        self.no_freeze_sign = self.create_blank(
-            width, height, rgb_color=self.green)
-        cv2.putText(self.no_freeze_sign, "No_freeze", (20, 35),
-                    cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
-
-        ##################################
-        # Initialize display window for bodypart coordinate
-        cv2.namedWindow('coords')
-        cv2.moveWindow('coords', 1000, 50)
-
-        # # generate array for total number of nan value for each video frame
-        # self.column_nan = np.array(
-        #     [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
-        #      for y in range(len(self.mdf.index))])
-
-        # I think this is a better way to do it but we shall see.
-        # Above comment contains the old version of this code
-        # leng = len(self.mdf.loc[1])
-        # for i in range(0, len(self.mdf)):
-        #     temp = 0
-        #     for j in range(0, leng, 3):
-        #         if math.isnan(self.mdf.loc[i][j]):
-        #             temp = temp + 1
-        #     self.column_nan.append(temp)
-
-        # Speed improvement (wi:2022/05/30)
-        self.column_nan = self.mdf.isnull().sum(axis=1).to_numpy()
-
+################################
+# Prepare data
     def initialize_param(self):
         '''
         initialize_param
@@ -307,19 +207,55 @@ class EditLabels():
         y_pixcels = img.shape[0]
         self.dim = (x_pixcels*self.mag_factor, y_pixcels*self.mag_factor)
 
+        print('#########################################################')
         print("video resolution: {}".format(video_format))
         print("total frame number: {}".format(self.tots))
+        print('#########################################################')
 
         ###################################
-        # Read inferred coordinate from h5 file
-        self.mdf = pd.read_hdf(self.h5_path)
+        # Labeled coordinate h5 file
+        # Process labeled data to categorize train, train_diff, and test data frames
+        #   to show markers for labeled training dataset
+        if self.labeled_h5 != '':
+            self.read_labeled_data(
+                labeled_h5_path=self.labeled_h5, train_pickle_path=self.labeled_for_train_pickle)
+
+        ###################################
+        # Inferred coordinate h5 file
+        if self.initial_label:
+            # Create all NaN inferred coordinate data frame with size of self.tots
+            _columnName = pd.MultiIndex.from_product(
+                [self.labeled_scorer, self.labeled_individuals, self.labeled_bodyparts, np.append(
+                    self.labeled_coords, ['likelihood'])],
+                names=["scorer", "individuals", "bodyparts", "coords"])
+            _a = np.empty((self.tots, 24))
+            _a[:] = np.nan
+            self.mdf = pd.DataFrame(_a, columns=_columnName)
+
+        else:
+            self.mdf = pd.read_hdf(self.h5_path)
+
+        if len(self.mdf) < self.tots:
+            print('#########################################################')
+            print('Inferred frames is less than the original video frames')
+            print('Add extra ', self.tots - len(self.mdf), ' rows of NaNs')
+            print('#########################################################')
+
+            # Create extra rows of NaN
+            _extra_rows = self.tots - len(self.mdf)
+            _columnName = self.mdf.columns
+            _a = np.empty((_extra_rows, 24))
+            _a[:] = np.nan
+            _df = pd.DataFrame(_a, columns=_columnName)
+
+            # Concatenate
+            self.mdf = pd.concat([self.mdf, _df], ignore_index=True, axis=0)
 
         # (20220606 wi: quick fix for DEEPLABCUT DOES NOT generate inferred coords for all frames of the original video)
-        if len(self.mdf) < self.tots:
-            print('### Inferred frames is less than the original video frames ###')
-            print('### self.tots is set as len(self.mdf) :',
-                  len(self.mdf), ' frames ###')
-            self.tots = len(self.mdf)
+            # print('### Inferred frames is less than the original video frames ###')
+            # print('### self.tots is set as len(self.mdf) :',
+            #       len(self.mdf), ' frames ###')
+            # self.tots = len(self.mdf)
 
         self.mdf_org = self.mdf.copy()    # Keep original
 
@@ -335,15 +271,6 @@ class EditLabels():
         # compute index arrays the likelihood is below the threshold
         # lh_threshold = 0.1
         _ = self.comp_likelihood_threshold(lh_threshold=0.1)
-
-        ###################################
-        # Generate dataframes for train, train_diff, and test
-        #   to show markers for labeled training dataset
-        if self.labeled_h5 != '':
-            # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
-            # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
-            self.read_labeled_data(
-                labeled_h5_path=self.labeled_h5, train_pickle_path=self.labeled_for_train_pickle)
 
         ###################################
         # keyboard commands
@@ -426,14 +353,116 @@ class EditLabels():
         events = list(_events.values())
 
         # print out the ratio of Nan or below the threshold to the total video frames
+        print('#########################################################')
         print('## The ratio of Nan to the entire video frames. (total: ',
               self.max_time, ' frames)')
         for individual in self.individuals:
             for bodypart in self.bodyparts:
                 print('{0}: {1:8.2f}'.format(individual + bodypart,
                                              len(_events[individual + bodypart]) / self.max_time))
+        print('#########################################################')
 
         return events
+
+    def read_labeled_data(self, labeled_h5_path='', train_pickle_path=''):
+        #################################
+        # Read the labeled h5 file
+
+        if self.initial_label:
+            # generate labeled h5 dataset of all 50.0
+            # column labels
+            col0 = ['wi']
+            col1 = ['sub1', 'sub2']
+            col2 = ['snout', 'leftear', 'rightear', 'tailbase']
+            col3 = ['x', 'y']
+            columnName = pd.MultiIndex.from_product([col0, col1, col2, col3], names=[
+                                                    "scorer", "individuals", "bodyparts", "coords"])
+
+            # index labels
+            mypath = labeled_h5_path
+
+            from os import listdir
+            from os.path import isfile, join
+            onlyfiles = [f for f in listdir(mypath) if isfile(join(mypath, f))]
+
+            ind0 = ['labeled-data']
+            ind1 = ['rpicam-01_1806_20210722_212134']
+            ind2 = onlyfiles
+            indexNames = pd.MultiIndex.from_product([ind0, ind1, ind2])
+
+            # genrate labeled dataset
+            _a = np.empty((len(indexNames), 16))
+            _a[:] = 50
+            _df_labeled_dataset = pd.DataFrame(
+                _a, index=indexNames, columns=columnName)
+
+        else:
+            _df_labeled_dataset = pd.read_hdf(labeled_h5_path)
+
+        # Extract column labels from specific levels
+        self.labeled_scorer = _df_labeled_dataset.columns.unique(
+            level='scorer').to_numpy()
+        self.labeled_individuals = _df_labeled_dataset.columns.unique(
+            level='individuals').to_numpy()
+        self.labeled_bodyparts = _df_labeled_dataset.columns.unique(
+            level='bodyparts').to_numpy()
+        self.labeled_coords = _df_labeled_dataset.columns.unique(
+            level='coords').to_numpy()
+
+        if self.initial_label:
+            label_image_names = [_df_labeled_dataset.index[x][2]
+                                 for x in range(len(_df_labeled_dataset))]
+            self.df_train = self.prep_df(
+                _df_labeled_dataset, label_image_names)
+
+        else:
+            #################################
+            # Analyze the details of labeled coordinates used for training and testing
+            _df_train_dataset = pd.read_pickle(train_pickle_path)
+
+            # 1) generate train_image_names, list of png file names, extracted from train_pickle file.
+            #   _df_train_dataset[0] is python dictionary
+            _df_train_coords = _df_train_dataset[0]
+            #   extract image names to an array
+            train_image_names = [_df_train_coords[x]['image'][2]
+                                 for x in range(len(_df_train_coords))]
+            train_image_names.sort()
+
+            # 2) generate train2_image_names, list of png file names, extracted from train_pickle file.
+            #   list of video frame IDs for training (It has additional 2 frames)
+            _df_train2_ids = _df_train_dataset[1]
+            _df_train2_ids.sort()
+            train2_image_names = list(
+                _df_labeled_dataset.iloc[_df_train2_ids].reset_index()['level_2'].to_numpy())
+
+            # 3) generate train_image_names_diff, the difference between train_image_names and train2_image_names
+            #   Get difference between two lists
+            #   https://stackoverflow.com/questions/3462143/get-difference-between-two-lists
+            train_image_names_diff = list(
+                (set(train2_image_names).difference(set(train_image_names))))
+
+            # 4) generate test_image_names, list of png file names for testing.
+            #   list of video frame IDs for testing
+            _df_test_ids = _df_train_dataset[2]
+            _df_test_ids.sort()
+            test_image_names = list(_df_labeled_dataset.iloc[_df_test_ids].reset_index()[
+                                    'level_2'].to_numpy())
+
+            #################################
+            # Extract the datasets for train, train_diff and test from the labeled dataset
+
+            self.df_train = self.prep_df(
+                _df_labeled_dataset, train_image_names)
+            self.df_train_diff = self.prep_df(
+                _df_labeled_dataset, train_image_names_diff)
+            self.df_test = self.prep_df(_df_labeled_dataset, test_image_names)
+
+            print('Reconstructed total rows are :', len(
+                self.df_train) + len(self.df_train_diff) + len(self.df_test))
+
+        # Create array of all labeled coord
+        self.labeled_data = np.column_stack((self.df_train.loc[self.idx[:], self.idx[:, :, :, ('x')]].to_numpy().flatten(),
+                                             self.df_train.loc[self.idx[:], self.idx[:, :, :, ('y')]].to_numpy().flatten()))
 
     def prep_df(self, _df_org, image_names):
         '''
@@ -457,77 +486,338 @@ class EditLabels():
 
         return _df
 
-    def read_labeled_data(self, labeled_h5_path='', train_pickle_path=''):
+    def read_traj(self, video):
+        '''
+        # read *_trac_freeze.csv file and extract
+        #    landmark coordinates for l1_coord, l2_coord, and l4_coord
+        #    trajectory coordinates for sub1 and sub2
+        #    freezing state (bool) for sub1 and sub2
+        #
+        # <file format>
+        # measurement:
+        # l1_coord-l4_coord(width), 295.0
+        # l1_coord-l2_coord(half_dep), 86.5
+        #
+        # landmark:
+        # name,x,y
+        # l1_coord, ,
+        # l2_coord, ,
+        # l4_coord, ,
+        #
+        # coordinate:
+        # frame,sub1_x,sub1_y,sub2_x,sub2_y,sub1_freeze,sub2_freeze
+        #
+        # Old format, which starts with frame,sub1_x ... can be read.
+        #
+        '''
+        column_type = ['int', 'int', 'int', 'int', 'int', 'bool', 'bool']
 
-        #################################
-        # Identify video frame IDs used for training and testing
+        # defalt values
+        width = 295.0
+        half_dep = 86.5
+        l1_coord, l2_coord, l4_coord = [0, 0], [0, 0], [0, 0]
 
-        #################################
-        # Read files
-        # read the pickle file for training
-        # pickle_path = 'training-datasets/homecage_test01_DJ95shuffle1.pickle'
-        # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
-        _df_train_dataset = pd.read_pickle(train_pickle_path)
+        path, filename = os.path.split(video)
+        base, _ext = os.path.splitext(filename)
+        filename = '_' + base + '_track_freeze.csv'
+        input_filename = os.path.join(path, filename)
 
-        # read the h5 file for the labeled frames
-        # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
-        _df_labeled_dataset = pd.read_hdf(labeled_h5_path)
+        print("Reading {}".format(filename))
 
-        #################################
-        # Extract lists of image_names for train, train2, and test
+        # reading csv file
+        with open(input_filename, 'r') as csvfile:
+            # creating a csv reader object
+            csvreader = csv.reader(csvfile)
 
-        # train_image_names
-        #   dataframe of labeled coords for each video frame used for training
-        _df_train_coords = _df_train_dataset[0]
-        #   extract image names to an array
-        train_image_names = [_df_train_coords[x]['image'][2]
-                             for x in range(len(_df_train_coords))]
-        train_image_names.sort()
-        # print(train_image_names)
+            # extracting each data row one by one
+            for row in csvreader:
+                if row[0] == 'L1-L4(width)':
+                    width = float(row[1])
+                elif row[0] == 'L1-L2(half_dep)':
+                    half_dep = float(row[1])
+                elif row[0] == 'L1':
+                    l1_coord = [int(row[1]), int(row[2])]
+                elif row[0] == 'L2':
+                    l2_coord = [int(row[1]), int(row[2])]
+                elif row[0] == 'L4':
+                    l4_coord = [int(row[1]), int(row[2])]
+                elif row[0] == 'coordinate:':
+                    break
+                elif row[0] == 'frame':
+                    csvfile.seek(csvreader.line_num - 1)  # back one line
+                    break
+            # after break, use dataframe.read_csv
+            df_input = pd.read_csv(csvfile, index_col=False)
+            # Need to convert to object to set numpy array in a cell
+            df_input = df_input.astype(object)
 
-        # train2_image_names/train_image_names_diff
-        #   list of video frame IDs for training (It has additional 2 frames)
-        _df_train2_ids = _df_train_dataset[1]
-        _df_train2_ids.sort()
-        train2_image_names = list(
-            _df_labeled_dataset.iloc[_df_train2_ids].reset_index()['level_2'].to_numpy())
-        #   check the difference between train_image_names and train2_image_names
-        #   Get difference between two lists
-        #   https://stackoverflow.com/questions/3462143/get-difference-between-two-lists
-        train_image_names_diff = list(
-            (set(train2_image_names).difference(set(train_image_names))))
+        # Post process from str to array
+        for i in range(0, len(df_input)):
+            for j in range(0, len(df_input.columns)):
+                if column_type[j] == 'int_array':
+                    df_input.iloc[i, j] = np.fromstring(
+                        df_input.iloc[i, j][1:-1], dtype=int, sep=' ')
 
-        # test_image_names
-        #   list of video frame IDs for testing
-        _df_test_ids = _df_train_dataset[2]
-        _df_test_ids.sort()
-        test_image_names = list(_df_labeled_dataset.iloc[_df_test_ids].reset_index()[
-                                'level_2'].to_numpy())
+        xy1 = df_input[['sub1_x', 'sub1_y']].to_numpy()
+        xy2 = df_input[['sub2_x', 'sub2_y']].to_numpy()
+        freeze = df_input[['sub1_freeze', 'sub2_freeze']].to_numpy()
 
-        #################################
-        # Extract the datasets for train, train_diff and test from the labeled dataset
+        return width, half_dep, l1_coord, l2_coord, l4_coord, xy1, xy2, freeze
 
-        self.df_train = self.prep_df(_df_labeled_dataset, train_image_names)
-        self.df_train_diff = self.prep_df(
-            _df_labeled_dataset, train_image_names_diff)
-        self.df_test = self.prep_df(_df_labeled_dataset, test_image_names)
+################################
+# Initialize windows
+    def initialize_windows(self):
+        '''
+        initialize_windows
+        '''
+        ###################################
+        # Initialize main video windows
+        cv2.namedWindow('image')
+        cv2.moveWindow('image', 250, 300)
+        # Set mouse callback
+        cv2.setMouseCallback('image', self.mouse_call_back)
 
-        # Extract data from specific levels
-        self.labeled_scorer = self.df_train.columns.unique(
-            level='scorer').to_numpy()
-        self.labeled_individuals = self.df_train.columns.unique(
-            level='individuals').to_numpy()
-        self.labeled_bodyparts = self.df_train.columns.unique(
-            level='bodyparts').to_numpy()
-        self.labeled_coords = self.df_train.columns.unique(
-            level='coords').to_numpy()
+        # # Open video file
+        # self.cap = cv2.VideoCapture(self.video)
+        # # Get the total number of frame
+        # self.tots = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        print('Reconstructed total rows are :', len(
-            self.df_train) + len(self.df_train_diff) + len(self.df_test))
+        # Add two slider bars
+        # for frame position
+        cv2.createTrackbar('S', 'image', 0, int(self.tots)-1, self.flick)
+        cv2.setTrackbarPos('S', 'image', 0)
+        # for play speed (fps)
+        cv2.createTrackbar('F', 'image', 1, 100, self.flick)
+        cv2.setTrackbarPos('F', 'image', self.frame_rate)
+        # cv2.setTrackbarPos('F','image',0)
 
-        # Create array of all labeled coord
-        self.labeled_data = np.column_stack((self.df_train.loc[self.idx[:], self.idx[:, :, :, ('x')]].to_numpy().flatten(),
-                                             self.df_train.loc[self.idx[:], self.idx[:, :, :, ('y')]].to_numpy().flatten()))
+        ##################################
+        # Initialize freeze indicator window for each subject
+        self.sub_freeze = ['sub1_freeze', 'sub2_freeze']
+        # animal 1
+        cv2.namedWindow(self.sub_freeze[0])
+        cv2.moveWindow(self.sub_freeze[0], 250, 50)
+        # animal 2
+        cv2.namedWindow(self.sub_freeze[1])
+        cv2.moveWindow(self.sub_freeze[1], 600, 50)
+
+        # Create image showing freeze/no_freeze
+        # freeze
+        width, height = 200, 50
+        self.freeze_sign = self.create_blank(width, height, rgb_color=self.red)
+        cv2.putText(self.freeze_sign, "Freeze", (40, 35),
+                    cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
+        # no_freeze
+        self.no_freeze_sign = self.create_blank(
+            width, height, rgb_color=self.green)
+        cv2.putText(self.no_freeze_sign, "No_freeze", (20, 35),
+                    cv2.FONT_HERSHEY_DUPLEX, 1.0, 255)
+
+        ##################################
+        # Initialize display window for bodypart coordinate
+        cv2.namedWindow('coords')
+        cv2.moveWindow('coords', 1000, 50)
+
+        # # generate array for total number of nan value for each video frame
+        # self.column_nan = np.array(
+        #     [self.mdf.loc[self.idx[y], self.idx[:, :, :, :]].isnull().sum()
+        #      for y in range(len(self.mdf.index))])
+
+        # I think this is a better way to do it but we shall see.
+        # Above comment contains the old version of this code
+        # leng = len(self.mdf.loc[1])
+        # for i in range(0, len(self.mdf)):
+        #     temp = 0
+        #     for j in range(0, leng, 3):
+        #         if math.isnan(self.mdf.loc[i][j]):
+        #             temp = temp + 1
+        #     self.column_nan.append(temp)
+
+        # Speed improvement (wi:2022/05/30)
+        self.column_nan = self.mdf.isnull().sum(axis=1).to_numpy()
+
+    def flick(self, _x):
+        '''
+        flick
+        '''
+        # pass
+
+    def mouse_call_back(self, event, read_x, read_y, _flags, _param):
+        '''
+        dragging
+
+        Mouse events handler
+        '''
+        # global cur_x, cur_y, drag, rclick, mode, pixel_limit
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if self.mode == 'drag_mode':
+                self.drag = True
+                self.cur_x, self.cur_y = read_x, read_y
+        elif event == cv2.EVENT_LBUTTONUP:
+            self.drag = False
+        elif event == cv2.EVENT_MOUSEMOVE:
+            self.cur_x, self.cur_y = read_x, read_y
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self.cur_x, self.cur_y = read_x, read_y
+            self.rclick = True
+        elif event == cv2.EVENT_RBUTTONUP:
+            self.rclick = False
+
+    def create_blank(self, width, height, rgb_color=(0, 0, 0)):
+        """
+        Create new image(numpy array) filled with certain color in RGB
+        """
+        # Create black blank image
+        image = np.zeros((height, width, 3), np.uint8)
+
+        # Since OpenCV uses BGR, convert the color first
+        color = tuple(reversed(rgb_color))
+        # Fill image with color
+        image[:] = color
+
+        return image
+
+################################
+# main loop
+    def main_loop(self):
+        '''
+        Main loop
+        '''
+        while True:
+            try:
+                # store current_frame
+                current_frame_bk = self.current_frame
+                # If reach to the end, play from the beginning
+                # if current_frame==tots-1:
+                if (self.current_frame == self.tots):
+                    self.current_frame = 0
+
+                # read a video frame
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
+                _ret, self.img = self.cap.read()
+
+                # resize video
+                self.img = cv2.resize(self.img, self.dim,
+                                      interpolation=cv2.INTER_AREA)
+
+                # display current state and real frame rate in the video
+                im_text1 = "video_status: " + self.status + ", frame_rate: " + \
+                    str(self.real_frame_rate) + " fps"
+                im_text2 = "nmode: " + self.mode + \
+                    ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
+                    ", freeze_flag: " + str(self.freeze_flag)
+
+                # add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+                # add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+                self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
+                self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+
+                # display all labeled coords
+                if self.show_labels:
+                    self.disp_all_labels()
+
+                # Display markers for each bodyparts
+                # Loop for all bodyparts
+                #   scorer -> individuals -> bodyparts
+                for i_sco in self.scorer:
+                    for i_ind in self.individuals:
+                        for i_bod in self.bodyparts:
+                            self.disp_marker(i_sco, i_ind, i_bod)
+
+                if self.labeled_h5 != '':
+                    for i_sco in self.labeled_scorer:
+                        for i_ind in self.labeled_individuals:
+                            for i_bod in self.labeled_bodyparts:
+                                self.disp_stable_marker(i_sco, i_ind, i_bod)
+
+                # show video frame
+                cv2.imshow('image', self.img)
+
+                # display freezing state panel
+                self.freezing_panel()
+
+                # display coordinates and p_value on coordinate panel
+                self.coordinate_panel()
+
+                # keyboard command
+                # Read key input
+                status_new = self.status_list[cv2.waitKey(1)]
+
+                # Quit app procedure
+                if self.key_comm(status_new):
+
+                    if self.process_list != '':
+                        # send pressed key and the extent to each process
+                        for _process_id_key in self.process_list:
+                            self.process_list[_process_id_key][1].put('e')
+                    break
+                # Regular loop
+                else:
+                    if self.process_list != '':
+                        # send current_frame to subwindows only when change
+                        if current_frame_bk != self.current_frame:
+                            # send pressed key and the extent to each process
+                            for _process_id_key in self.process_list:
+                                self.process_list[_process_id_key][1].put(
+                                    self.current_frame)
+
+                            # wait for completion of task
+                            for _process_id_key in self.process_list:
+                                self.process_list[_process_id_key][1].join()
+
+            except KeyError:
+                print("Invalid Key was pressed")
+
+    def add_text(self, img, text, text_top, image_scale):
+        """
+        Args:
+            img (numpy array of shape (width, height, 3): input image
+            text (str): text to add to image
+            text_top (int): position of top text to add
+            image_scale (float): image resize scale
+
+        Summary:
+            Add display text to a frame.
+
+        Returns:
+            Next available position of top text (allows for chaining this function)
+        """
+        cv2.putText(
+            img=img,
+            text=text,
+            org=(0, text_top),
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=image_scale,
+            color=(0, 255, 255),
+            thickness=2)
+        return text_top + int(5 * image_scale)
+
+    def disp_all_labels(self):
+        # def disp_stable_marker2(self, _df, i_sco, i_ind, i_bod, i_df):
+        '''
+        disp_all_labels()
+            display all labeled coords
+        '''
+        for i in range(len(self.labeled_data)):
+
+            [tab_x, tab_y] = self.labeled_data[i]
+
+            # if value is not empty, display the bodypart marker
+            if not (math.isnan(tab_x) or math.isnan(tab_y)):
+                stored_x = int(tab_x)*self.mag_factor
+                stored_y = int(tab_y)*self.mag_factor
+                label_deleted = False
+
+                # Display cross at the store position
+                [dis_x, dis_y] = [stored_x, stored_y]
+
+            # Draw circle as marker on video
+                # if not label_deleted:
+                # differential color for each animal
+                color = (0, 255, 255)
+
+                cv2.circle(self.img, (dis_x, dis_y), 10, color,
+                           thickness=1, lineType=8, shift=0)
 
     def disp_marker(self, i_sco, i_ind, i_bod):
         '''
@@ -637,7 +927,8 @@ class EditLabels():
         '''
         disp_stable_marker
         '''
-        dfs = [self.df_train, self.df_train_diff, self.df_test]
+        # dfs = [self.df_train, self.df_train_diff, self.df_test]
+        dfs = [self.df_train]
 
         for i_df in range(len(dfs)):
             # for _df in dfs:
@@ -668,33 +959,6 @@ class EditLabels():
                     color = (0, 255, 255)
                 elif i_ind == 'sub2':
                     color = (0, 255, 255)
-
-                cv2.circle(self.img, (dis_x, dis_y), 10, color,
-                           thickness=1, lineType=8, shift=0)
-
-    def disp_all_labels(self):
-        # def disp_stable_marker2(self, _df, i_sco, i_ind, i_bod, i_df):
-        '''
-        disp_all_labels()
-            display all labeled coords
-        '''
-        for i in range(len(self.labeled_data)):
-
-            [tab_x, tab_y] = self.labeled_data[i]
-
-            # if value is not empty, display the bodypart marker
-            if not (math.isnan(tab_x) or math.isnan(tab_y)):
-                stored_x = int(tab_x)*self.mag_factor
-                stored_y = int(tab_y)*self.mag_factor
-                label_deleted = False
-
-                # Display cross at the store position
-                [dis_x, dis_y] = [stored_x, stored_y]
-
-            # Draw circle as marker on video
-                # if not label_deleted:
-                # differential color for each animal
-                color = (0, 255, 255)
 
                 cv2.circle(self.img, (dis_x, dis_y), 10, color,
                            thickness=1, lineType=8, shift=0)
@@ -1004,6 +1268,17 @@ class EditLabels():
 
         return self.current_frame
 
+    def add_label(self, i_sco, i_ind, i_bod):
+        '''
+        add_label
+        '''
+        # Store the mouse pointer position into table
+        self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
+            [self.cur_x, self.cur_y, 1.0]
+        self.mdf_modified[self.current_frame] = True
+        print('one label is added')
+        self.column_nan[self.current_frame] = self.column_nan[self.current_frame] - 1
+
     def reset_to_original(self):
         '''
         reset_to_original
@@ -1017,221 +1292,56 @@ class EditLabels():
 
         self.mdf_modified[self.current_frame] = False
 
-    def add_label(self, i_sco, i_ind, i_bod):
+################################
+# output files
+    def output_files(self):
         '''
-        add_label
+        output_files
         '''
-        # Store the mouse pointer position into table
-        self.mdf.loc[self.idx[self.current_frame], self.idx[i_sco, i_ind, i_bod, :]] = \
-            [self.cur_x, self.cur_y, 1.0]
-        self.mdf_modified[self.current_frame] = True
-        print('one label is added')
-        self.column_nan[self.current_frame] = self.column_nan[self.current_frame] - 1
+        # write file ([video]_track_freeze.csv) for trajectory and freezing
+        self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
+                        self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
 
-    def main_loop(self):
-        '''
-        Main loop
-        '''
-        while True:
-            try:
-                # store current_frame
-                current_frame_bk = self.current_frame
-                # If reach to the end, play from the begining
-                # if current_frame==tots-1:
-                if (self.current_frame == self.tots):
-                    self.current_frame = 0
+        # write file ([video]_freeze.csv) for freeze start, end duration
+        self.write_freeze(self.tots, self.freeze, self.video)
 
-                # read a video frame
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-                _ret, self.img = self.cap.read()
+        # outpur h5 file for newly labeled frames
+        tz_ny = pytz.timezone('America/New_York')
+        now = datetime.now(tz_ny)
+        extrxt_dir = os.path.join(
+            './', now.strftime("%Y%m%d-%H%M%S") + '-extracted')
+        if not os.path.isdir(extrxt_dir):
+            os.mkdir(extrxt_dir)
 
-                # resize video
-                self.img = cv2.resize(self.img, self.dim,
-                                      interpolation=cv2.INTER_AREA)
+        #########################
+        video_name = os.path.splitext(os.path.basename(self.video))[0]
 
-                # display current state and real frame rate in the video
-                im_text1 = "video_status: " + self.status + ", frame_rate: " + \
-                    str(self.real_frame_rate) + " fps"
-                im_text2 = "nmode: " + self.mode + \
-                    ", freeze_sub: sub-" + str(self.freeze_sub+1) + \
-                    ", freeze_flag: " + str(self.freeze_flag)
+        # select modified rows
+        _df = self.mdf[self.mdf_modified]
 
-                # add_text(self.img, im_text1, self.dim[1]-40, 0.5)
-                # add_text(self.img, im_text2, self.dim[1]-20, 0.5)
-                self.add_text(self.img, im_text1, self.dim[1]-40, 0.5)
-                self.add_text(self.img, im_text2, self.dim[1]-20, 0.5)
+        # drop likelihood
+        _df = _df.drop(['likelihood'], axis=1, level=3)
 
-                # display all labeled coords
-                if self.show_labels:
-                    self.disp_all_labels()
+        # adjust multi-index index
+        a = ["img{:0>5d}.png".format(x) for x in _df.index]
+        idx = pd.MultiIndex.from_product([['labeled-data'], [video_name], a])
+        _df.index = idx
 
-                # Display markers for each bodyparts
-                # Loop for all bodyparts
-                #   scorer -> individuals -> bodyparts
-                for i_sco in self.scorer:
-                    for i_ind in self.individuals:
-                        for i_bod in self.bodyparts:
-                            self.disp_marker(i_sco, i_ind, i_bod)
+        _df.to_hdf(extrxt_dir+'/extracted.h5',
+                   key='df_output', mode='w')
 
-                if self.labeled_h5 != '':
-                    for i_sco in self.labeled_scorer:
-                        for i_ind in self.labeled_individuals:
-                            for i_bod in self.labeled_bodyparts:
-                                self.disp_stable_marker(i_sco, i_ind, i_bod)
+        _df.to_csv(extrxt_dir+'/extracted.csv')
 
-                # show video frame
-                cv2.imshow('image', self.img)
-
-                # display freezing state panel
-                self.freezing_panel()
-
-                # display coordinates and p_value on coordinate panel
-                self.coordinate_panel()
-
-                # keyboard command
-                # Read key input
-                status_new = self.status_list[cv2.waitKey(1)]
-
-                # Quit app procedure
-                if self.key_comm(status_new):
-
-                    if self.process_list != '':
-                        # send pressed key and the extent to each process
-                        for _process_id_key in self.process_list:
-                            self.process_list[_process_id_key][1].put('e')
-                    break
-                # Regular loop
-                else:
-                    if self.process_list != '':
-                        # send current_frame to subwindows only when change
-                        if current_frame_bk != self.current_frame:
-                            # send pressed key and the extent to each process
-                            for _process_id_key in self.process_list:
-                                self.process_list[_process_id_key][1].put(
-                                    self.current_frame)
-
-                            # wait for completion of task
-                            for _process_id_key in self.process_list:
-                                self.process_list[_process_id_key][1].join()
-
-            except KeyError:
-                print("Invalid Key was pressed")
-
-    def create_blank(self, width, height, rgb_color=(0, 0, 0)):
-        """
-        Create new image(numpy array) filled with certain color in RGB
-        """
-        # Create black blank image
-        image = np.zeros((height, width, 3), np.uint8)
-
-        # Since OpenCV uses BGR, convert the color first
-        color = tuple(reversed(rgb_color))
-        # Fill image with color
-        image[:] = color
-
-        return image
-
-    def add_text(self, img, text, text_top, image_scale):
-        """
-        Args:
-            img (numpy array of shape (width, height, 3): input image
-            text (str): text to add to image
-            text_top (int): position of top text to add
-            image_scale (float): image resize scale
-
-        Summary:
-            Add display text to a frame.
-
-        Returns:
-            Next available position of top text (allows for chaining this function)
-        """
-        cv2.putText(
-            img=img,
-            text=text,
-            org=(0, text_top),
-            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-            fontScale=image_scale,
-            color=(0, 255, 255),
-            thickness=2)
-        return text_top + int(5 * image_scale)
-
-    def read_traj(self, video):
-        '''
-        # read *_trac_freeze.csv file and extract
-        #    landmark coordinates for l1_coord, l2_coord, and l4_coord
-        #    trajectory coordinates for sub1 and sub2
-        #    freezing state (bool) for sub1 and sub2
-        #
-        # <file format>
-        # measurement:
-        # l1_coord-l4_coord(width), 295.0
-        # l1_coord-l2_coord(half_dep), 86.5
-        #
-        # landmark:
-        # name,x,y
-        # l1_coord, ,
-        # l2_coord, ,
-        # l4_coord, ,
-        #
-        # coordinate:
-        # frame,sub1_x,sub1_y,sub2_x,sub2_y,sub1_freeze,sub2_freeze
-        #
-        # Old format, which starts with frame,sub1_x ... can be read.
-        #
-        '''
-        column_type = ['int', 'int', 'int', 'int', 'int', 'bool', 'bool']
-
-        # defalt values
-        width = 295.0
-        half_dep = 86.5
-        l1_coord, l2_coord, l4_coord = [0, 0], [0, 0], [0, 0]
-
-        path, filename = os.path.split(video)
-        base, _ext = os.path.splitext(filename)
-        filename = '_' + base + '_track_freeze.csv'
-        input_filename = os.path.join(path, filename)
-
-        print("Reading {}".format(filename))
-
-        # reading csv file
-        with open(input_filename, 'r') as csvfile:
-            # creating a csv reader object
-            csvreader = csv.reader(csvfile)
-
-            # extracting each data row one by one
-            for row in csvreader:
-                if row[0] == 'L1-L4(width)':
-                    width = float(row[1])
-                elif row[0] == 'L1-L2(half_dep)':
-                    half_dep = float(row[1])
-                elif row[0] == 'L1':
-                    l1_coord = [int(row[1]), int(row[2])]
-                elif row[0] == 'L2':
-                    l2_coord = [int(row[1]), int(row[2])]
-                elif row[0] == 'L4':
-                    l4_coord = [int(row[1]), int(row[2])]
-                elif row[0] == 'coordinate:':
-                    break
-                elif row[0] == 'frame':
-                    csvfile.seek(csvreader.line_num - 1)  # back one line
-                    break
-            # after break, use dataframe.read_csv
-            df_input = pd.read_csv(csvfile, index_col=False)
-            # Need to convert to object to set numpy array in a cell
-            df_input = df_input.astype(object)
-
-        # Post process from str to array
-        for i in range(0, len(df_input)):
-            for j in range(0, len(df_input.columns)):
-                if column_type[j] == 'int_array':
-                    df_input.iloc[i, j] = np.fromstring(
-                        df_input.iloc[i, j][1:-1], dtype=int, sep=' ')
-
-        xy1 = df_input[['sub1_x', 'sub1_y']].to_numpy()
-        xy2 = df_input[['sub2_x', 'sub2_y']].to_numpy()
-        freeze = df_input[['sub1_freeze', 'sub2_freeze']].to_numpy()
-
-        return width, half_dep, l1_coord, l2_coord, l4_coord, xy1, xy2, freeze
+        # Extract video frames modified
+        for frame in range(self.tots):
+            if self.mdf_modified[frame]:
+                print("frame = ", frame, " is modified", end=": ")
+                # read one video frame
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
+                _ret, img = self.cap.read()
+                cv2.imwrite(extrxt_dir+"/img" +
+                            "{:05d}".format(frame)+".png", img)
+                print("Snap of Frame", frame, "Taken!")
 
     def write_traj(self, width, half_dep, l1_coord, l2_coord, l4_coord, tots, xy1, xy2, freeze, video):
         '''
@@ -1401,28 +1511,46 @@ class EditLabels():
         return output_str
 
 
+################################
+# For running the script itself
 def read_input(input_csv, i):
+    sheet_number = 0
+    _df = pd.read_excel(input_csv,
+                        sheet_name=sheet_number,
+                        header=0,
+                        index_col=False,
+                        keep_default_na=True
+                        )
 
-    _df = pd.read_csv(input_csv)
+    # _df = pd.read_csv(input_csv)
+    _df.fillna('', inplace=True)
+
     inferred_path = _df.loc[i, 'inferred_path']
     inferred_video = _df.loc[i, 'inferred_video']
     inferred_h5 = _df.loc[i, 'inferred_h5']
-
-    inferred_video = os.path.join(inferred_path, inferred_video)
-    inferred_h5 = os.path.join(inferred_path, inferred_h5)
+    if inferred_video != '':
+        inferred_video = os.path.join(inferred_path, inferred_video)
+    if inferred_h5 != '':
+        inferred_h5 = os.path.join(inferred_path, inferred_h5)
 
     training_path = _df.loc[i, 'training_path']
-    labeled_h5 = _df.loc[i, 'labeled_h5']
     labeled_for_train_pickle = _df.loc[i, 'labeled_for_train_pickle']
-
-    if pd.isna(_df.loc[i, 'training_path']):
-        training_path = ''
-        labeled_h5 = ''
-        labeled_for_train_pickle = ''
-    else:
-        labeled_h5 = os.path.join(training_path, labeled_h5)
+    if labeled_for_train_pickle != '':
         labeled_for_train_pickle = os.path.join(
             training_path, labeled_for_train_pickle)
+
+    labeling_path = _df.loc[i, 'labeling_path']
+    labeled_h5 = _df.loc[i, 'labeled_h5']
+    labeled_h5 = os.path.join(labeling_path, labeled_h5)
+
+    # if pd.isna(_df.loc[i, 'training_path']):
+    #     training_path = ''
+    #     labeled_h5 = ''
+    #     labeled_for_train_pickle = ''
+    # else:
+    #     labeled_h5 = os.path.join(training_path, labeled_h5)
+    #     labeled_for_train_pickle = os.path.join(
+    #         training_path, labeled_for_train_pickle)
 
     return inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle
 
@@ -1433,7 +1561,8 @@ def start(inferred_video='', inferred_h5='',
 
     input_process_list = ''
 
-    if plot_type in ['raster', 'wave']:
+    # if plot_type in ['raster', 'wave'] and os.path.splitext(inferred_h5)[1] == '.h5':
+    if plot_type in ['raster', 'wave'] and inferred_h5 != '':
         # set input_file for plotting window
         input_files = [[inferred_h5,     plot_type]]
 
@@ -1453,9 +1582,12 @@ def start(inferred_video='', inferred_h5='',
 if __name__ == '__main__':
 
     # input data
-    if os.path.exists('input.csv'):
+
+    input_path = 'input.xlsx'
+
+    if os.path.exists(input_path):
         inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
-            'input.csv', 1)
+            input_path, 5)
     else:
         ############################
         # example data
