@@ -481,7 +481,7 @@ def spawn_wins(process_members, window_spec):
     return process_list
 
 
-def read_input(input_csv, i):
+def read_input2(input_csv, i):
 
     _df = pd.read_csv(input_csv)
     inferred_path = _df.loc[i, 'inferred_path']
@@ -508,16 +508,19 @@ def read_input(input_csv, i):
 
 
 if __name__ == '__main__':
-
+    import edit_labels as el
     # input data
-    if os.path.exists('input.csv'):
-        inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
-            'input.csv', 0)
+
+    input_path = 'input.xlsx'
+
+    if os.path.exists(input_path):
+        inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = el.read_input(
+            input_path, 0)
     else:
         ############################
         # example data
         # inferred result h5
-        inferred_h5 = r'edit_labels_input_data\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
+        inferred_h5 = r'input_data\rpicam-01_1806_20210722_212134DLC_dlcrnetms5_homecage_test01May17shuffle1_200000_el.h5'
 
     # set window size and position. win_y_len_axis is only for x-axis window.
     window_geo = {'win_x_len': 1000, 'win_y_len': 100, 'win_y_len_axis': 30,

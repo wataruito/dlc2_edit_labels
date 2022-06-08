@@ -46,6 +46,7 @@ import math
 import collections
 import csv
 from datetime import datetime
+from click import pass_context
 import numpy as np
 import pandas as pd
 import cv2
@@ -79,15 +80,26 @@ class EditLabels():
         # def __init__(self, h5_path, video, mag_factor, process_list=''):
         '''
         '''
-        # multiprocess
+        # for multi-process
         self.process_list = process_list
 
-        self.h5_path = inferred_h5              # DeepLabCut inferring result file
-        self.video = inferred_video                  # video path
-        self.mag_factor = mag_factor        # magnifying video
+        # input files
+        self.video = inferred_video             # inferred video path
+        self.h5_path = inferred_h5              # inferred coordinate h5 file by DeepLabCut
 
-        self.labeled_h5 = labeled_h5
+        self.labeled_h5 = labeled_h5            # labeled coordinate h5 file
         self.labeled_for_train_pickle = labeled_for_train_pickle
+        # detail for self.labeled_h5 file
+
+        self.mag_factor = mag_factor            # magnifying video
+
+        # set flag for initial labeling
+
+        # if os.path.splitext(self.h5_path)[1] != '.h5' and os.path.splitext(self.labeled_for_train_pickle)[1] != '.pickle':
+        if self.h5_path == '' and self.labeled_for_train_pickle == '':
+            self.initial_label = True
+        else:
+            self.initial_label = False
 
         self.status_list = []               # key command list
 
@@ -201,8 +213,27 @@ class EditLabels():
         print('#########################################################')
 
         ###################################
-        # Read inferred coordinate from h5 file
-        self.mdf = pd.read_hdf(self.h5_path)
+        # Labeled coordinate h5 file
+        # Process labeled data to categorize train, train_diff, and test data frames
+        #   to show markers for labeled training dataset
+        if self.labeled_h5 != '':
+            self.read_labeled_data(
+                labeled_h5_path=self.labeled_h5, train_pickle_path=self.labeled_for_train_pickle)
+
+        ###################################
+        # Inferred coordinate h5 file
+        if self.initial_label:
+            # Create all NaN inferred coordinate data frame with size of self.tots
+            _columnName = pd.MultiIndex.from_product(
+                [self.labeled_scorer, self.labeled_individuals, self.labeled_bodyparts, np.append(
+                    self.labeled_coords, ['likelihood'])],
+                names=["scorer", "individuals", "bodyparts", "coords"])
+            _a = np.empty((self.tots, 24))
+            _a[:] = np.nan
+            self.mdf = pd.DataFrame(_a, columns=_columnName)
+
+        else:
+            self.mdf = pd.read_hdf(self.h5_path)
 
         if len(self.mdf) < self.tots:
             print('#########################################################')
@@ -240,15 +271,6 @@ class EditLabels():
         # compute index arrays the likelihood is below the threshold
         # lh_threshold = 0.1
         _ = self.comp_likelihood_threshold(lh_threshold=0.1)
-
-        ###################################
-        # Process labeled data to categorize train, train_diff, and test data frames
-        #   to show markers for labeled training dataset
-        if self.labeled_h5 != '':
-            # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
-            # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
-            self.read_labeled_data(
-                labeled_h5_path=self.labeled_h5, train_pickle_path=self.labeled_for_train_pickle)
 
         ###################################
         # keyboard commands
@@ -343,72 +365,100 @@ class EditLabels():
         return events
 
     def read_labeled_data(self, labeled_h5_path='', train_pickle_path=''):
-
         #################################
-        # Identify video frame IDs used for training and testing
+        # Read the labeled h5 file
 
-        #################################
-        # Read files
-        # read the pickle file for training
-        # pickle_path = 'training-datasets/homecage_test01_DJ95shuffle1.pickle'
-        # train_pickle_path = 'training-datasets/Documentation_data-homecage_test01_95shuffle1.pickle'
-        _df_train_dataset = pd.read_pickle(train_pickle_path)
+        if self.initial_label:
+            # generate labeled h5 dataset of all 50.0
+            # column labels
+            col0 = ['wi']
+            col1 = ['sub1', 'sub2']
+            col2 = ['snout', 'leftear', 'rightear', 'tailbase']
+            col3 = ['x', 'y']
+            columnName = pd.MultiIndex.from_product([col0, col1, col2, col3], names=[
+                                                    "scorer", "individuals", "bodyparts", "coords"])
 
-        # read the h5 file for the labeled frames
-        # labeled_h5_path = 'training-datasets/CollectedData_DJ.h5'
-        _df_labeled_dataset = pd.read_hdf(labeled_h5_path)
+            # index labels
+            mypath = labeled_h5_path
 
-        #################################
-        # Extract lists of image_names for train, train2, and test
+            from os import listdir
+            from os.path import isfile, join
+            onlyfiles = [f for f in listdir(mypath) if isfile(join(mypath, f))]
 
-        # train_image_names
-        #   dataframe of labeled coords for each video frame used for training
-        _df_train_coords = _df_train_dataset[0]
-        #   extract image names to an array
-        train_image_names = [_df_train_coords[x]['image'][2]
-                             for x in range(len(_df_train_coords))]
-        train_image_names.sort()
-        # print(train_image_names)
+            ind0 = ['labeled-data']
+            ind1 = ['rpicam-01_1806_20210722_212134']
+            ind2 = onlyfiles
+            indexNames = pd.MultiIndex.from_product([ind0, ind1, ind2])
 
-        # train2_image_names/train_image_names_diff
-        #   list of video frame IDs for training (It has additional 2 frames)
-        _df_train2_ids = _df_train_dataset[1]
-        _df_train2_ids.sort()
-        train2_image_names = list(
-            _df_labeled_dataset.iloc[_df_train2_ids].reset_index()['level_2'].to_numpy())
-        #   check the difference between train_image_names and train2_image_names
-        #   Get difference between two lists
-        #   https://stackoverflow.com/questions/3462143/get-difference-between-two-lists
-        train_image_names_diff = list(
-            (set(train2_image_names).difference(set(train_image_names))))
+            # genrate labeled dataset
+            _a = np.empty((len(indexNames), 16))
+            _a[:] = 50
+            _df_labeled_dataset = pd.DataFrame(
+                _a, index=indexNames, columns=columnName)
 
-        # test_image_names
-        #   list of video frame IDs for testing
-        _df_test_ids = _df_train_dataset[2]
-        _df_test_ids.sort()
-        test_image_names = list(_df_labeled_dataset.iloc[_df_test_ids].reset_index()[
-                                'level_2'].to_numpy())
+        else:
+            _df_labeled_dataset = pd.read_hdf(labeled_h5_path)
 
-        #################################
-        # Extract the datasets for train, train_diff and test from the labeled dataset
-
-        self.df_train = self.prep_df(_df_labeled_dataset, train_image_names)
-        self.df_train_diff = self.prep_df(
-            _df_labeled_dataset, train_image_names_diff)
-        self.df_test = self.prep_df(_df_labeled_dataset, test_image_names)
-
-        # Extract data from specific levels
-        self.labeled_scorer = self.df_train.columns.unique(
+        # Extract column labels from specific levels
+        self.labeled_scorer = _df_labeled_dataset.columns.unique(
             level='scorer').to_numpy()
-        self.labeled_individuals = self.df_train.columns.unique(
+        self.labeled_individuals = _df_labeled_dataset.columns.unique(
             level='individuals').to_numpy()
-        self.labeled_bodyparts = self.df_train.columns.unique(
+        self.labeled_bodyparts = _df_labeled_dataset.columns.unique(
             level='bodyparts').to_numpy()
-        self.labeled_coords = self.df_train.columns.unique(
+        self.labeled_coords = _df_labeled_dataset.columns.unique(
             level='coords').to_numpy()
 
-        print('Reconstructed total rows are :', len(
-            self.df_train) + len(self.df_train_diff) + len(self.df_test))
+        if self.initial_label:
+            label_image_names = [_df_labeled_dataset.index[x][2]
+                                 for x in range(len(_df_labeled_dataset))]
+            self.df_train = self.prep_df(
+                _df_labeled_dataset, label_image_names)
+
+        else:
+            #################################
+            # Analyze the details of labeled coordinates used for training and testing
+            _df_train_dataset = pd.read_pickle(train_pickle_path)
+
+            # 1) generate train_image_names, list of png file names, extracted from train_pickle file.
+            #   _df_train_dataset[0] is python dictionary
+            _df_train_coords = _df_train_dataset[0]
+            #   extract image names to an array
+            train_image_names = [_df_train_coords[x]['image'][2]
+                                 for x in range(len(_df_train_coords))]
+            train_image_names.sort()
+
+            # 2) generate train2_image_names, list of png file names, extracted from train_pickle file.
+            #   list of video frame IDs for training (It has additional 2 frames)
+            _df_train2_ids = _df_train_dataset[1]
+            _df_train2_ids.sort()
+            train2_image_names = list(
+                _df_labeled_dataset.iloc[_df_train2_ids].reset_index()['level_2'].to_numpy())
+
+            # 3) generate train_image_names_diff, the difference between train_image_names and train2_image_names
+            #   Get difference between two lists
+            #   https://stackoverflow.com/questions/3462143/get-difference-between-two-lists
+            train_image_names_diff = list(
+                (set(train2_image_names).difference(set(train_image_names))))
+
+            # 4) generate test_image_names, list of png file names for testing.
+            #   list of video frame IDs for testing
+            _df_test_ids = _df_train_dataset[2]
+            _df_test_ids.sort()
+            test_image_names = list(_df_labeled_dataset.iloc[_df_test_ids].reset_index()[
+                                    'level_2'].to_numpy())
+
+            #################################
+            # Extract the datasets for train, train_diff and test from the labeled dataset
+
+            self.df_train = self.prep_df(
+                _df_labeled_dataset, train_image_names)
+            self.df_train_diff = self.prep_df(
+                _df_labeled_dataset, train_image_names_diff)
+            self.df_test = self.prep_df(_df_labeled_dataset, test_image_names)
+
+            print('Reconstructed total rows are :', len(
+                self.df_train) + len(self.df_train_diff) + len(self.df_test))
 
         # Create array of all labeled coord
         self.labeled_data = np.column_stack((self.df_train.loc[self.idx[:], self.idx[:, :, :, ('x')]].to_numpy().flatten(),
@@ -877,7 +927,8 @@ class EditLabels():
         '''
         disp_stable_marker
         '''
-        dfs = [self.df_train, self.df_train_diff, self.df_test]
+        # dfs = [self.df_train, self.df_train_diff, self.df_test]
+        dfs = [self.df_train]
 
         for i_df in range(len(dfs)):
             # for _df in dfs:
@@ -1262,10 +1313,24 @@ class EditLabels():
         if not os.path.isdir(extrxt_dir):
             os.mkdir(extrxt_dir)
 
-        self.mdf[self.mdf_modified].to_hdf(extrxt_dir+'/extracted.h5',
-                                           key='df_output', mode='w')
+        #########################
+        video_name = os.path.splitext(os.path.basename(self.video))[0]
 
-        self.mdf[self.mdf_modified].to_csv(extrxt_dir+'/extracted.csv')
+        # select modified rows
+        _df = self.mdf[self.mdf_modified]
+
+        # drop likelihood
+        _df = _df.drop(['likelihood'], axis=1, level=3)
+
+        # adjust multi-index index
+        a = ["img{:0>5d}.png".format(x) for x in _df.index]
+        idx = pd.MultiIndex.from_product([['labeled-data'], [video_name], a])
+        _df.index = idx
+
+        _df.to_hdf(extrxt_dir+'/extracted.h5',
+                   key='df_output', mode='w')
+
+        _df.to_csv(extrxt_dir+'/extracted.csv')
 
         # Extract video frames modified
         for frame in range(self.tots):
@@ -1449,27 +1514,43 @@ class EditLabels():
 ################################
 # For running the script itself
 def read_input(input_csv, i):
+    sheet_number = 0
+    _df = pd.read_excel(input_csv,
+                        sheet_name=sheet_number,
+                        header=0,
+                        index_col=False,
+                        keep_default_na=True
+                        )
 
-    _df = pd.read_csv(input_csv)
+    # _df = pd.read_csv(input_csv)
+    _df.fillna('', inplace=True)
+
     inferred_path = _df.loc[i, 'inferred_path']
     inferred_video = _df.loc[i, 'inferred_video']
     inferred_h5 = _df.loc[i, 'inferred_h5']
-
-    inferred_video = os.path.join(inferred_path, inferred_video)
-    inferred_h5 = os.path.join(inferred_path, inferred_h5)
+    if inferred_video != '':
+        inferred_video = os.path.join(inferred_path, inferred_video)
+    if inferred_h5 != '':
+        inferred_h5 = os.path.join(inferred_path, inferred_h5)
 
     training_path = _df.loc[i, 'training_path']
-    labeled_h5 = _df.loc[i, 'labeled_h5']
     labeled_for_train_pickle = _df.loc[i, 'labeled_for_train_pickle']
-
-    if pd.isna(_df.loc[i, 'training_path']):
-        training_path = ''
-        labeled_h5 = ''
-        labeled_for_train_pickle = ''
-    else:
-        labeled_h5 = os.path.join(training_path, labeled_h5)
+    if labeled_for_train_pickle != '':
         labeled_for_train_pickle = os.path.join(
             training_path, labeled_for_train_pickle)
+
+    labeling_path = _df.loc[i, 'labeling_path']
+    labeled_h5 = _df.loc[i, 'labeled_h5']
+    labeled_h5 = os.path.join(labeling_path, labeled_h5)
+
+    # if pd.isna(_df.loc[i, 'training_path']):
+    #     training_path = ''
+    #     labeled_h5 = ''
+    #     labeled_for_train_pickle = ''
+    # else:
+    #     labeled_h5 = os.path.join(training_path, labeled_h5)
+    #     labeled_for_train_pickle = os.path.join(
+    #         training_path, labeled_for_train_pickle)
 
     return inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle
 
@@ -1480,7 +1561,8 @@ def start(inferred_video='', inferred_h5='',
 
     input_process_list = ''
 
-    if plot_type in ['raster', 'wave']:
+    # if plot_type in ['raster', 'wave'] and os.path.splitext(inferred_h5)[1] == '.h5':
+    if plot_type in ['raster', 'wave'] and inferred_h5 != '':
         # set input_file for plotting window
         input_files = [[inferred_h5,     plot_type]]
 
@@ -1500,9 +1582,12 @@ def start(inferred_video='', inferred_h5='',
 if __name__ == '__main__':
 
     # input data
-    if os.path.exists('input.csv'):
+
+    input_path = 'input.xlsx'
+
+    if os.path.exists(input_path):
         inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
-            'input.csv', 0)
+            input_path, 5)
     else:
         ############################
         # example data
