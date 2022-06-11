@@ -12,10 +12,19 @@ Interface:
 <Video control>
     w: start playing
     s: stop playing
+
     a: step back a frame
     d: step forward a frame
+
+    ~: set <frame_jump> parameter
+    A: step back <frame_jump> frames
+    D: step forward <frame_jump> frames
+
+    g: jump to specific frame
+
     q: play faster
     e: play slower
+
     <space>: go to next frame containing nan value
 
     <: go to previous labeled frame
@@ -26,18 +35,22 @@ Interface:
     left hold drag: drag a marker
     right click: delete a marker
     r: back to the inferring coords
+    Tab: toggle target subject
     <number>: add body part (see number for each bod part in the coordinate window)
     p: set threshold p_value, which set the boundary between thick and thin cross marking
 
 <annotating freeze>
-    !: target sub1
-    @: target sub2
+    (Dropped) !: target sub1
+    (Dropped) @: target sub2
     j: freezing start, freeze_flag on (first video frame for freeze)
     k: freezing end, freeze_flag off (first video frame when animal start moving)
     u: erase freezing annotation, freeze_flag off
 
 <mode change>
     0: drug mode
+
+<Quit>
+    Esc: quit the tool
 '''
 
 import os
@@ -182,6 +195,8 @@ class EditLabels():
 
         self.img = []
 
+        self.frame_jump = 10
+
         # number of body parts with NaN coordinate among subjects
         self.column_nan = []
 
@@ -297,8 +312,14 @@ class EditLabels():
         # keyboard commands
         self.status_list = {ord('s'): 'stop',
                             ord('w'): 'play',
+
                             ord('a'): 'prev_frame',
                             ord('d'): 'next_frame',
+                            ord('A'): 'prev_frame_jump',
+                            ord('D'): 'next_frame_jump',
+                            ord('~'): 'set_jump',
+                            ord('g'): 'jump_to_frame',
+
                             ord('q'): 'slow',
                             ord('e'): 'fast',
 
@@ -345,7 +366,7 @@ class EditLabels():
                     self.video)
 
             # idx = pd.IndexSlice
-            bodypart = 'nose'
+            bodypart = 'snout'
             coords = ['x', 'y']
             self.xy1 = self.mdf.loc[self.idx[:], self.idx[:, 'sub1', bodypart, coords]
                                     ].to_numpy().astype(int)*self.mag_factor
@@ -445,10 +466,13 @@ class EditLabels():
             # For initial labeling, only create df_train
             label_image_names = [_df_labeled_dataset.index[x][2]
                                  for x in range(len(_df_labeled_dataset))]
-            self.df_train = self.prep_df(
-                _df_labeled_dataset, label_image_names)
+            idx = pd.IndexSlice
+            self.dfm_train = _df_labeled_dataset.loc[idx[:,
+                                                         :, label_image_names], :]
+            self.df_train = self.prep_df(self.dfm_train)
 
         else:
+            '''
             # For re-labeling for refinement, read the pickle file to identify which video frames are used for training
             #################################
             # Analyze the details of labeled coordinates used for training and testing
@@ -493,12 +517,58 @@ class EditLabels():
 
             print('Reconstructed total rows are :', len(
                 self.df_train) + len(self.df_train_diff) + len(self.df_test))
+            '''
+
+            _df_train_dataset = pd.read_pickle(train_pickle_path)
+
+            # extract video name without extension
+            path, filename = os.path.split(self.video)
+            base, _ext = os.path.splitext(filename)
+            video_name = base
+
+            # select rows used for test
+            _df_train_dataset[2].sort()
+            self.dfm_test = _df_labeled_dataset.iloc[_df_train_dataset[2]]
+            # extract rows by video name
+            self.dfm_test = self.dfm_test[self.dfm_test.index.get_level_values(
+                1) == video_name].sort_index()
+            self.df_test = self.prep_df(self.dfm_test)
+
+            # select rows used for train
+            index_list = [_df_train_dataset[0][x]['image']
+                          for x in range(len(_df_train_dataset[0]))]
+            self.dfm_train = _df_labeled_dataset.loc[index_list]
+            # extract rows by video name
+            self.dfm_train = self.dfm_train[self.dfm_train.index.get_level_values(
+                1) == video_name].sort_index()
+            self.df_train = self.prep_df(self.dfm_train)
 
         # Create array of all labeled coord
         self.labeled_data = np.column_stack((self.df_train.loc[self.idx[:], self.idx[:, :, :, ('x')]].to_numpy().flatten(),
                                              self.df_train.loc[self.idx[:], self.idx[:, :, :, ('y')]].to_numpy().flatten()))
 
-    def prep_df(self, _df_org, image_names):
+    def prep_df(self, _df_org):
+        '''
+        # Reset the index to the frame number same as in the inferred data frame
+        '''
+
+        # idx = pd.IndexSlice
+
+        # extract
+        # _df = _df_org.loc[idx[:, :, image_names], :]
+        _df = _df_org.reset_index()
+
+        # generate the frame number for column ''.
+        _df[''] = [int(re.search('img(.+?).png', text).group(1))
+                   for text in _df['level_2'].to_numpy()]
+
+        # set index on the created frame number
+        _df = _df.set_index('', drop=True)
+        _df = _df.drop(['level_0', 'level_1', 'level_2'], axis=1, level=0)
+
+        return _df
+
+    def prep_df_org(self, _df_org, image_names):
         '''
         # Extract labeled data by image_names list and
         # reset the index to the frame number same as in the inferred dataframe
@@ -1125,6 +1195,35 @@ class EditLabels():
         # video stop mode
         elif self.status == 'stop':
             self.current_frame = cv2.getTrackbarPos('S', 'image')
+        # jump
+        elif self.status == 'prev_frame_jump':
+            # current_frame-=1
+            self.current_frame = self.current_frame - self.frame_jump
+            if self.current_frame < 0:
+                self.current_frame = self.tots-1
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+            self.status = 'stop'
+        elif self.status == 'next_frame_jump':
+            # current_frame+=1
+            self.current_frame = self.current_frame + self.frame_jump
+            if self.current_frame >= self.tots:
+                self.current_frame = 0
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+            self.status = 'stop'
+        elif self.status == 'set_jump':
+            self.frame_jump = int(input('Enter frame number for one jump: '))
+            print('frame_jump is set as: ', self.frame_jump, ' frames')
+            self.status = status_pre
+        elif self.status == 'jump_to_frame':
+            jump_to_frame = int(input('Enter frame number you want to jump: '))
+            print('Jump to ', jump_to_frame, ' frame')
+            self.current_frame = jump_to_frame
+            if self.current_frame >= self.tots:
+                self.current_frame = 0
+            if self.current_frame < 0:
+                self.current_frame = self.tots-1
+            cv2.setTrackbarPos('S', 'image', self.current_frame)
+            self.status = 'stop'
         # goto previous frame
         elif self.status == 'prev_frame':
             self.current_frame -= 1
@@ -1343,6 +1442,8 @@ class EditLabels():
         '''
         output_files
         '''
+        #########################
+        # behavior annotation
         # write file ([video]_track_freeze.csv) for trajectory and freezing
         self.write_traj(self.width, self.half_dep, self.l1_coord, self.l2_coord,
                         self.l4_coord, self.tots, self.xy1, self.xy2, self.freeze, self.video)
@@ -1350,7 +1451,11 @@ class EditLabels():
         # write file ([video]_freeze.csv) for freeze start, end duration
         self.write_freeze(self.tots, self.freeze, self.video)
 
-        # outpur h5 file for newly labeled frames
+        #########################
+        # labeled body part coordinates
+        # output h5 file for newly labeled frames
+
+        # Create extracted directory
         tz_ny = pytz.timezone('America/New_York')
         now = datetime.now(tz_ny)
         extrxt_dir = os.path.join(
@@ -1358,35 +1463,73 @@ class EditLabels():
         if not os.path.isdir(extrxt_dir):
             os.mkdir(extrxt_dir)
 
-        #########################
+        # get video name from the read video file
         video_name = os.path.splitext(os.path.basename(self.video))[0]
+        # get scorer from the labeled data
+        scorer = self.dfm_train.columns.levels[0][0]
 
-        # select modified rows
+        # extract modified rows
         _df = self.mdf[self.mdf_modified]
-
         # drop likelihood
         _df = _df.drop(['likelihood'], axis=1, level=3)
-
-        # adjust multi-index index
+        # adjust multi-index index to labeled format
         a = ["img{:0>5d}.png".format(x) for x in _df.index]
         idx = pd.MultiIndex.from_product([['labeled-data'], [video_name], a])
         _df.index = idx
+        # set scorer matched to the labeled frame
+        _df = self.change_index_column(_df, scorer=scorer)
 
-        _df.to_hdf(extrxt_dir+'/extracted.h5',
+        # # check files before concatenate
+        # _df.to_csv(extrxt_dir+'/_df.csv')
+        # self.dfm_train.to_csv(extrxt_dir+'/dfm_train.csv')
+        # self.dfm_test.to_csv(extrxt_dir+'/dfm_test.csv')
+
+        # concatenate with previously labeled frames
+        _df = pd.concat([_df, self.dfm_train, self.dfm_test])
+        # drop old duplicate labels and sort
+        _df = _df[~_df.index.duplicated(keep='first')].sort_index(level=2)
+        # save the merged coordinates as extracted.h5 and csv
+        extracted_file_name = '/CollectedData_'+scorer
+        _df.to_hdf(extrxt_dir + extracted_file_name + '.h5',
                    key='df_output', mode='w')
-
-        _df.to_csv(extrxt_dir+'/extracted.csv')
+        _df.to_csv(extrxt_dir + extracted_file_name + '.csv')
 
         # Extract video frames modified
-        for frame in range(self.tots):
-            if self.mdf_modified[frame]:
-                print("frame = ", frame, " is modified", end=": ")
-                # read one video frame
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
-                _ret, img = self.cap.read()
-                cv2.imwrite(extrxt_dir+"/img" +
-                            "{:05d}".format(frame)+".png", img)
-                print("Snap of Frame", frame, "Taken!")
+        # convert the merged labeled coord to inferred coord format
+        _df2 = self.prep_df(_df)
+
+        for frame in _df2.index:
+            # print("frame = ", frame, " is modified", end=": ")
+            # read one video frame
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
+            _ret, img = self.cap.read()
+            cv2.imwrite(extrxt_dir+"/img" +
+                        "{:05d}".format(frame)+".png", img)
+            print("Snap of Frame", frame, "Taken!")
+        # for frame in range(self.tots):
+        #     if self.mdf_modified[frame]:
+        #         print("frame = ", frame, " is modified", end=": ")
+        #         # read one video frame
+        #         self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame)
+        #         _ret, img = self.cap.read()
+        #         cv2.imwrite(extrxt_dir+"/img" +
+        #                     "{:05d}".format(frame)+".png", img)
+        #         print("Snap of Frame", frame, "Taken!")
+
+    def change_index_column(self, _df, scorer='', video=''):
+        # change scorer
+        if scorer != '':
+            _a = _df.columns.levels[0].str.replace(
+                list(_df.columns.levels[0])[0], scorer)
+            _df.columns = _df.columns.set_levels(_a, level=0)
+
+        # change video
+        if video != '':
+            _b = _df.index.levels[1].str.replace(
+                list(_df.index.levels[1])[0], video)
+            _df.index = _df.index.set_levels(_b, level=1)
+
+        return _df
 
     def write_traj(self, width, half_dep, l1_coord, l2_coord, l4_coord, tots, xy1, xy2, freeze, video):
         '''
@@ -1451,7 +1594,7 @@ class EditLabels():
         epoch_num = 50
 
         freeze_start = np.array([[-1 for x in range(2)]
-                                 for y in range(epoch_num)], dtype=int)
+                                for y in range(epoch_num)], dtype=int)
         freeze_end = np.array([[-1 for x in range(2)]
                                for y in range(epoch_num)], dtype=int)
         freeze_dur = np.array([[-1.0 for x in range(2)]
@@ -1493,11 +1636,11 @@ class EditLabels():
         # store into pandas dataframe
         df_output = pd.DataFrame(
             data=np.concatenate((freeze_start[:, 0][:, np.newaxis],
-                                 freeze_end[:, 0][:, np.newaxis],
-                                 freeze_dur[:, 0][:, np.newaxis],
-                                 freeze_start[:, 1][:, np.newaxis],
-                                 freeze_end[:, 1][:, np.newaxis],
-                                 freeze_dur[:, 1][:, np.newaxis]), axis=1),
+                                freeze_end[:, 0][:, np.newaxis],
+                                freeze_dur[:, 0][:, np.newaxis],
+                                freeze_start[:, 1][:, np.newaxis],
+                                freeze_end[:, 1][:, np.newaxis],
+                                freeze_dur[:, 1][:, np.newaxis]), axis=1),
             columns=column_name)
 
         # set each dtype
@@ -1632,7 +1775,7 @@ if __name__ == '__main__':
 
     if os.path.exists(input_path):
         inferred_video, inferred_h5, labeled_h5, labeled_for_train_pickle = read_input(
-            input_path, 7)
+            input_path, 1)
     else:
         ############################
         # example data
